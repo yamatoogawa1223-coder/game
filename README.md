@@ -26,3 +26,6 @@
 
 ## もう1本: 評価社会
 選択型シミュレーション。`hyoka-shakai/index.html` をブラウザで開いて遊べます（詳細は `hyoka-shakai/README.md`）。
+
+## もう1本: 評価社会 RPG
+ドット絵で街を歩く版。`hyoka-rpg/index.html` をブラウザで開いて遊べます（詳細は `hyoka-rpg/README.md`）。

@@ -1,0 +1,509 @@
+<!DOCTYPE html>
+<html lang="ja">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1, user-scalable=no">
+<title>評価社会 RPG</title>
+<style>
+  @import url('https://fonts.googleapis.com/css2?family=DotGothic16&display=swap');
+  html, body { margin:0; height:100%; background:#0b1216; overflow:hidden; }
+  body { display:flex; align-items:center; justify-content:center; touch-action:none; user-select:none; -webkit-user-select:none; }
+  #wrap { position:relative; width:min(100vw, 100vh * 4 / 3); aspect-ratio:4/3; }
+  canvas { width:100%; height:100%; display:block; background:#000; transition:filter 1.5s; }
+  .pad { position:absolute; bottom:2%; display:none; }
+  .pad.l { left:2%; grid-template-columns:repeat(3, 11vmin); grid-template-rows:repeat(2, 11vmin); gap:1vmin; }
+  .pad.r { right:2%; gap:2vmin; }
+  .pad button { border-radius:14px; border:2px solid #7fe0d8; background:rgba(10,30,40,.6); color:#7fe0d8; font:700 4.5vmin/1 'DotGothic16', sans-serif; touch-action:none; }
+  .pad button.on { background:rgba(127,224,216,.45); }
+  .pad.r button { width:15vmin; height:15vmin; border-radius:50%; }
+  @media (pointer: coarse) { .pad.l { display:grid; } .pad.r { display:flex; } }
+</style>
+</head>
+<body>
+<div id="wrap">
+  <canvas id="game" width="960" height="720"></canvas>
+  <div class="pad l"><span></span><button data-a="up">▲</button><span></span><button data-a="left">◀</button><button data-a="down">▼</button><button data-a="right">▶</button></div>
+  <div class="pad r"><button data-a="cancel">X</button><button data-a="ok">Z</button></div>
+</div>
+<script src="events.js"></script>
+<script>
+'use strict';
+// 評価社会 RPG — ドット絵の街を歩いて、評価される日々を14日間生き延びる
+
+const VW = 320, VH = 240, SC = 3, W = VW * SC, H = VH * SC, T = 16;
+const cv = document.getElementById('game'), ctx = cv.getContext('2d');
+const wc = document.createElement('canvas'); wc.width = VW; wc.height = VH;
+const g = wc.getContext('2d');
+const FONT = "'DotGothic16','Hiragino Kaku Gothic ProN','Yu Gothic','Meiryo','Noto Sans CJK JP',sans-serif";
+const clamp = (v, a, b) => Math.max(a, Math.min(b, v));
+const hash = n => { n = Math.sin(n * 127.1 + 311.7) * 43758.5453; return n - Math.floor(n); };
+const rankOf = s => (s >= 750 ? 'S' : s >= 500 ? 'A' : s >= 300 ? 'B' : 'C');
+const HOUSE = { S: '高層タワー 42F', A: '駅近マンション', B: '共同寮（4人部屋）', C: '退去勧告' };
+const tier = self => (self >= 70 ? 0 : self >= 40 ? 1 : self >= 20 ? 2 : 3);
+
+// ---------- 状態 ----------
+const START = { day: 1, score: 500, self: 100, mio: 0, kw: 0, tk: 0, stepped: 0, flags: {}, hist: [], shown: 500 };
+const S = {};
+let pending = [], done = {}, floaters = [], dayRes = null;
+
+// ---------- マップ ----------
+const MW = 36, MH = 26;
+const grid = Array.from({ length: MH }, () => Array(MW).fill('g'));
+const bmap = Array.from({ length: MH }, () => Array(MW).fill(-1));
+const rect = (x0, y0, x1, y1, ch) => { for (let y = y0; y <= y1; y++) for (let x = x0; x <= x1; x++) grid[y][x] = ch; };
+rect(0, 10, MW - 1, 11, 'r'); rect(17, 0, 18, MH - 1, 'r'); rect(12, 14, 23, 20, 'p');
+const BUILDINGS = [
+  { x0: 3, y0: 3, x1: 9, y1: 8, door: 6, roof: '#4aa3a0', name: '自宅マンション' },
+  { x0: 20, y0: 3, x1: 27, y1: 8, door: 23, roof: '#5b7fd0', name: '職場' },
+  { x0: 29, y0: 1, x1: 34, y1: 8, door: 31, roof: '#3d4a5c', name: '管理局' },
+  { x0: 22, y0: 15, x1: 28, y1: 19, door: 25, roof: '#e58a4a', name: 'コンビニ' },
+  { x0: 3, y0: 14, x1: 8, y1: 19, door: -1, roof: '#8f9db0', name: '' },
+];
+BUILDINGS.forEach((b, i) => {
+  for (let y = b.y0; y <= b.y1; y++) for (let x = b.x0; x <= b.x1; x++) { grid[y][x] = y < b.y0 + 2 ? 'R' : 'B'; bmap[y][x] = i; }
+  if (b.door >= 0) grid[b.y1][b.door] = 'D';
+});
+[[1, 1], [1, 6], [11, 2], [12, 4], [15, 3], [2, 12], [33, 13], [31, 22], [9, 22], [1, 22], [4, 24], [14, 24], [30, 15], [34, 20], [11, 7]].forEach(([x, y]) => { if (grid[y][x] === 'g') grid[y][x] = 't'; });
+const POLES = [[16, 9], [19, 12], [11, 12], [24, 12], [16, 21], [28, 9], [10, 9]];
+POLES.forEach(([x, y]) => { grid[y][x] = 'C'; });
+grid[9][12] = 'b'; grid[9][14] = 'b'; grid[8][13] = 'b';
+grid[16][17] = 'f'; grid[17][17] = 'f'; grid[16][18] = 'f'; grid[17][18] = 'f';
+const isSolid = ch => 'BRDtCbf'.includes(ch);
+const solidAt = (px, py) => { const x = Math.floor(px / T), y = Math.floor(py / T); return x < 0 || y < 0 || x >= MW || y >= MH || isSolid(grid[y][x]); };
+
+// マップをあらかじめ描いておく
+const mapCv = document.createElement('canvas'); mapCv.width = MW * T; mapCv.height = MH * T;
+(function paintMap() {
+  const m = mapCv.getContext('2d');
+  const R = (c, x, y, w, h) => { m.fillStyle = c; m.fillRect(x, y, w, h); };
+  for (let ty = 0; ty < MH; ty++) for (let tx = 0; tx < MW; tx++) {
+    const ch = grid[ty][tx], x = tx * T, y = ty * T, h0 = hash(tx * 7 + ty * 13);
+    const base = ch === 'r' ? '#c7d1d8' : ch === 'p' ? ((tx + ty) % 2 ? '#e8eef1' : '#dfe7eb') : '#a9dcb1';
+    R(base, x, y, T, T);
+    if (['g', 't', 'C', 'b'].includes(ch)) { for (let i = 0; i < 4; i++) R(hash(tx * 9 + ty * 3 + i) > 0.5 ? '#98d0a2' : '#b9e6bf', x + Math.floor(hash(tx + i * 5 + ty * 11) * 14), y + Math.floor(hash(ty + i * 7 + tx * 3) * 14), 2, 2); }
+    if (ch === 'r' && (tx === 17 || tx === 18) && ty % 2 === 0 && grid[10][tx] !== 'r') R('#fff', x + (tx === 17 ? 14 : 0), y + 4, 2, 8);
+    if (ch === 'r' && (ty === 10 || ty === 11) && tx % 2 === 0 && !(tx >= 17 && tx <= 18)) R('#fff', x + 4, y + (ty === 10 ? 14 : 0), 8, 2);
+    if (ch === 't') { R('#6b4a33', x + 7, y + 10, 3, 6); R('#3f9a5a', x + 2, y + 1, 12, 11); R('#56b874', x + 4, y + 2, 5, 4); R('#347f4a', x + 8, y + 7, 5, 4); }
+    if (ch === 'C') { R('#4a5560', x + 7, y + 4, 2, 12); R('#1d2228', x + 3, y + 1, 10, 5); R('#ff5555', x + 5, y + 3, 2, 2); }
+    if (ch === 'b') { R('#7fa0b8', x + 3, y + 4, 10, 10); R('#5d8098', x + 3, y + 4, 10, 2); R('#dfe9ef', x + 6, y + 8, 4, 1); }
+    if (ch === 'f') { R('#b5d8ee', x, y, T, T); R('#8fc0e0', x + 2, y + 2, 12, 12); R('#d6ecf8', x + 5, y + 5, 3, 3); }
+    if (ch === 'R') { const b = BUILDINGS[bmap[ty][tx]]; R(b.roof, x, y, T, T); R('rgba(255,255,255,.18)', x, y + (ty % 2 ? 0 : 8), T, 3); R('rgba(0,0,0,.12)', x, y + 13, T, 3); }
+    if (ch === 'B' || ch === 'D') {
+      R('#f3f6f8', x, y, T, T); R('#dfe6ea', x, y + 14, T, 2);
+      if (ch === 'B' && (tx + ty) % 2 === 0) { R('#5f7f96', x + 2, y + 2, 12, 9); R('#9fd3f0', x + 3, y + 3, 10, 7); R('#cdeaf9', x + 4, y + 4, 3, 2); }
+      if (ch === 'D') { R('#2d4f63', x + 3, y + 1, 10, 15); R('#5f95b3', x + 5, y + 3, 6, 6); R('#ffd84a', x + 10, y + 9, 2, 2); }
+    }
+  }
+  // 集積所の床
+  R('rgba(120,140,160,.25)', 11 * T, 8 * T, 4 * T, 2 * T);
+})();
+
+const LABELS = [['自宅', 6.5, 2.4], ['職場', 23.5, 2.4], ['管理局', 32, 0.4], ['コンビニ', 25.5, 14.4], ['集積所', 13, 7.3], ['広場', 20.5, 13.3]];
+
+// ---------- 人物 ----------
+const LOOK = {
+  player: { hair: '#3a2a20', cloth: '#2f7fbf', pants: '#33415a' },
+  neighbor: { hair: '#7a5a3a', cloth: '#7cc47f', pants: '#5a6a7a' },
+  kacho: { hair: '#555', cloth: '#6a6f7a', pants: '#3a3f4a' },
+  taka: { hair: '#2a2a2a', cloth: '#5b7fd0', pants: '#33415a' },
+  kawai: { hair: '#e8e8e8', cloth: '#a58bc9', pants: '#6a5a7a' },
+  mio: { hair: '#7a4a2a', cloth: '#f08fa8', pants: '#5a4a6a' },
+  walker: { hair: '#222', cloth: '#e5645a', pants: '#3a3f4a' },
+  officer: { hair: '#111', cloth: '#f2f4f6', pants: '#222b36' },
+  newbie: { hair: '#3a2a20', cloth: '#9fc9e8', pants: '#556' },
+  fallen: { hair: '#2a2a2a', cloth: '#c8a05a', pants: '#445' },
+};
+function person(x, y, dir, step, look, face) {
+  const px = Math.round(x) - 8, py = Math.round(y) - 16, bob = step % 2 ? 1 : 0;
+  const R = (c, ax, ay, w, h) => { g.fillStyle = c; g.fillRect(px + ax, py + ay, w, h); };
+  R('rgba(0,0,0,.18)', 3, 14, 10, 2);
+  const l = step % 2 ? 1 : 0;
+  R(look.pants, 5, 12 + l, 3, 3 - l); R(look.pants, 9, 13 - l, 3, 2 + l);
+  R(look.cloth, 4, 7 + bob, 8, 6); R('rgba(0,0,0,.15)', 4, 11 + bob, 8, 2);
+  R(look.cloth, 3, 8 + bob, 1, 4); R(look.cloth, 12, 8 + bob, 1, 4);
+  R('#f2cba0', 4, 1 + bob, 8, 7);
+  R(look.hair, 4, 0 + bob, 8, 3);
+  if (dir === 'up') R(look.hair, 4, 0 + bob, 8, 7);
+  else if (dir === 'down') { R(look.hair, 3, 1 + bob, 1, 3); R(look.hair, 12, 1 + bob, 1, 3); if (face) { R('#222', 6, 4 + bob, 1, 2); R('#222', 9, 4 + bob, 1, 2); } }
+  else { const s = dir === 'left' ? 0 : 1; R(look.hair, s ? 4 : 9, 1 + bob, 3, 5); if (face) R('#222', s ? 10 : 5, 4 + bob, 1, 2); }
+}
+function fallenSprite(x, y) {
+  const px = Math.round(x) - 8, py = Math.round(y) - 8;
+  g.fillStyle = 'rgba(0,0,0,.18)'; g.fillRect(px + 1, py + 10, 15, 2);
+  g.fillStyle = '#c8a05a'; g.fillRect(px + 5, py + 4, 9, 6); g.fillStyle = '#445'; g.fillRect(px + 13, py + 5, 3, 4);
+  g.fillStyle = '#f2cba0'; g.fillRect(px, py + 3, 6, 6); g.fillStyle = '#2a2a2a'; g.fillRect(px, py + 3, 6, 2);
+}
+function objectSprite(kind, x, y, t) {
+  const px = Math.round(x) - 8, py = Math.round(y) - 16;
+  const R = (c, ax, ay, w, h) => { g.fillStyle = c; g.fillRect(px + ax, py + ay, w, h); };
+  R('rgba(0,0,0,.18)', 2, 14, 12, 2);
+  if (kind === 'term') { R('#3b4b5a', 6, 6, 4, 9); R('#1f2b36', 2, 0, 12, 8); R('#5fe0c8', 3, 1, 10, 6); R('#fff', 4 + Math.floor(t * 4) % 6, 3, 2, 1); }
+  else if (kind === 'kiosk') { R('#f2f5f6', 2, 1, 12, 14); R('#4bc06a', 7, 3, 2, 6); R('#4bc06a', 5, 5, 6, 2); R('#9fb0bd', 2, 11, 12, 2); }
+  else if (kind === 'mirror') { R('#5f7f96', 2, 0, 12, 15); R('#bfe6f7', 3, 1, 10, 13); R('#fff', 4, 2, 2, 5); }
+  else if (kind === 'mover') { R('#e8e8e8', 0, 4, 16, 10); R('#c33', 0, 4, 16, 2); R('#333', 2, 13, 3, 3); R('#333', 11, 13, 3, 3); }
+}
+
+// ---------- アクター ----------
+const ACTORS = {
+  neighbor: { name: '隣人たち', x: 5, y: 9, look: 'neighbor', idle: '「おはようございます。 今日も スコア 高めですね」' },
+  kacho: { name: '課長', x: 22, y: 9, look: 'kacho', idle: () => S.stepped > 2 ? '「君は 本当に 頼りになる。 ……名前は なんだったかな」' : '「ん？ 何か 用かね」' },
+  kawai: { name: 'カワイさん', x: 13, y: 9, look: 'kawai', idle: () => S.kw > 0 ? '「みかん、 まだ あるからね」' : 'ごみ袋を 抱えて 何かを 確認している。' },
+  taka: { name: 'タカギ', x: 25, y: 9, look: 'taka', idle: () => S.flags.stoleIdea ? '「……」 目を 合わせてくれない。' : '「おつかれさま。 締め切り、 きついね」' },
+  mio: { name: 'ミオ', x: 14, y: 17, look: 'mio', idle: () => S.mio > 0 ? '「やっぱり 話せて よかった」' : '「……ううん、 なんでもない」' },
+  walker: { name: '通行人', x: 25, y: 20, look: 'walker', idle: '「コンビニは スコア 割引が ありますよ」' },
+  officer: { name: '管理官', x: 31, y: 9, look: 'officer', idle: '「あなたは 見られています。 それは 安心 です」' },
+  newbie: { name: '新入社員', x: 27, y: 10, look: 'newbie', idle: () => S.flags.newbieBlamed ? '……席が ない。' : '「すみません…… まだ 慣れなくて」' },
+  fallen: { name: '倒れた人', x: 17, y: 23, look: 'fallen', kind: 'fallen', idle: '……息は している。' },
+  term: { name: '掲示端末', x: 15, y: 14, kind: 'term', idle: '画面には「今日も 良い 一日を！」と 出ている。' },
+  kiosk: { name: '健康端末', x: 8, y: 9, kind: 'kiosk', idle: '「体調は 良好ですか？ 良好 と 答えてください」' },
+  mirror: { name: '鏡型AI', x: 20, y: 9, kind: 'mirror', idle: '鏡には 自分の 顔が 映っている。 少し 遠い 顔だ。' },
+  mover: { name: '引っ越し業者', x: 13, y: 9, kind: 'mover', idle: '「こちらの お部屋は 空きました」' },
+};
+const pxOf = a => a.x * T + 8, pyOf = a => a.y * T + 16;
+function visible(id) {
+  if (id === 'kawai') return !S.flags.reportedKawai && !(S.day === 5 && S.flags.reportedKawai);
+  if (id === 'mover') return !!S.flags.reportedKawai && S.day <= 5 && S.day >= 5;
+  if (id === 'mio') return !S.flags.reportedMio;
+  if (id === 'taka') return !S.flags.reportedTaka;
+  if (id === 'fallen') return S.day === 11;
+  if (id === 'newbie') return !S.flags.newbieBlamed || true;
+  return true;
+}
+function actorFor(ev) { return ev.who === 'kawai' && S.flags.reportedKawai ? 'mover' : ev.who; }
+
+// ---------- プレイヤー ----------
+const P = { x: 6.5 * T, y: 9.5 * T + 8, dir: 'down', step: 0, dist: 0 };
+let cam = { x: 0, y: 0 }, WT = 0, fade = 0, fadeTarget = 0;
+
+// ---------- 入力 ----------
+const held = { left: 0, right: 0, up: 0, down: 0 };
+const KEYMAP = { ArrowLeft: 'left', KeyA: 'left', ArrowRight: 'right', KeyD: 'right', ArrowUp: 'up', KeyW: 'up', ArrowDown: 'down', KeyS: 'down', KeyZ: 'ok', Enter: 'ok', Space: 'ok', KeyX: 'cancel', Escape: 'cancel' };
+function press(a) {
+  if (a in held) held[a] = 1;
+  if (ui) return uiKey(a);
+  if (mode === 'walk' && a === 'ok') interact();
+}
+function release(a) { if (a in held) held[a] = 0; }
+addEventListener('keydown', e => { const a = KEYMAP[e.code]; if (!a) return; e.preventDefault(); if (e.repeat && (a === 'ok' || a === 'cancel')) return; press(a); });
+addEventListener('keyup', e => { const a = KEYMAP[e.code]; if (a) release(a); });
+document.querySelectorAll('.pad button').forEach(b => {
+  const a = b.dataset.a;
+  b.addEventListener('pointerdown', e => { e.preventDefault(); b.classList.add('on'); press(a); });
+  ['pointerup', 'pointercancel', 'pointerleave'].forEach(ev => b.addEventListener(ev, () => { b.classList.remove('on'); release(a); }));
+});
+
+// ---------- テキストUI ----------
+let ui = null, mode = 'title';
+function wrap(text, maxW, size) {
+  ctx.font = `${size}px ${FONT}`;
+  const out = [];
+  for (const para of String(text).split('\n')) {
+    let line = '';
+    for (const ch of para) { if (ctx.measureText(line + ch).width > maxW && line) { out.push(line); line = ch; } else line += ch; }
+    out.push(line);
+  }
+  return out;
+}
+function say(text, o = {}) {
+  return new Promise(res => { ui = { type: 'say', lines: wrap(text, 830, 24), n: 0, total: 0, o, res }; ui.total = ui.lines.join('\n').length; });
+}
+function choose(text, options, head) {
+  return new Promise(res => { ui = { type: 'choose', head, lines: wrap(text, 830, 22), n: 0, opts: options.map(o => Object.assign({ lines: wrap(o.label, 780, 21) }, o)), idx: Math.max(0, options.findIndex(o => !o.disabled)), res }; ui.total = ui.lines.join('\n').length; });
+}
+function uiKey(a) {
+  if (ui.type === 'say') {
+    if (a !== 'ok') return;
+    if (ui.n < ui.total) { ui.n = ui.total; return; }
+    const r = ui.res; ui = null; r();
+  } else if (ui.type === 'choose') {
+    if (a === 'ok') {
+      if (ui.n < ui.total) { ui.n = ui.total; return; }
+      if (ui.opts[ui.idx].disabled) return;
+      const r = ui.res, i = ui.idx; ui = null; r(i);
+    } else if (ui.n >= ui.total) {
+      const d = a === 'up' ? -1 : a === 'down' ? 1 : 0; if (!d) return;
+      let i = ui.idx; do { i = (i + d + ui.opts.length) % ui.opts.length; } while (ui.opts[i].disabled && i !== ui.idx); ui.idx = i;
+    }
+  } else if (ui.type === 'end' && a === 'ok' && ui.t > 1.5) location.reload();
+  else if (ui.type === 'title' && a === 'ok') { const r = ui.res; ui = null; r(); }
+}
+function drawBox(x, y, w, h) {
+  ctx.fillStyle = 'rgba(8,16,24,.92)'; ctx.fillRect(x, y, w, h);
+  ctx.strokeStyle = '#7fe0d8'; ctx.lineWidth = 4; ctx.strokeRect(x + 2, y + 2, w - 4, h - 4);
+  ctx.strokeStyle = '#1d3a44'; ctx.lineWidth = 2; ctx.strokeRect(x + 8, y + 8, w - 16, h - 16);
+}
+function txt(s, x, y, size, col, align = 'left') { ctx.font = `${size}px ${FONT}`; ctx.fillStyle = col; ctx.textAlign = align; ctx.textBaseline = 'top'; ctx.fillText(s, x, y); }
+function typed(lines, n) { let left = n; return lines.map(l => { const t = l.slice(0, Math.max(0, left)); left -= l.length + 1; return t; }); }
+function drawUI(dt) {
+  if (!ui) return;
+  if (ui.type === 'say') {
+    ui.n = Math.min(ui.total, ui.n + dt * 50);
+    const o = ui.o, lh = 34, extra = (o.log ? 40 : 0) + (o.voice ? lh + 6 : 0);
+    const h = 40 + ui.lines.length * lh + extra, y = H - h - 20;
+    drawBox(40, y, W - 80, h);
+    let yy = y + 24;
+    if (o.log) { txt(o.log, 70, yy, 22, o.neg ? '#ff8a8a' : '#7fe0d8'); yy += 40; }
+    typed(ui.lines, Math.floor(ui.n)).forEach((l, i) => txt(l, 70, yy + i * lh, 24, '#fff'));
+    if (o.voice && ui.n >= ui.total) txt(o.voice, 70, yy + ui.lines.length * lh + 6, 22, '#9fb0bd');
+    if (ui.n >= ui.total && Math.floor(WT * 2) % 2) txt('▼', W - 80, y + h - 44, 20, '#7fe0d8', 'center');
+  } else if (ui.type === 'choose') {
+    ui.n = Math.min(ui.total, ui.n + dt * 60);
+    const lh = 32, textH = ui.lines.length * lh, optH = ui.opts.reduce((s, o) => s + o.lines.length * 28 + 22, 0);
+    const shown = ui.n >= ui.total;
+    const h = 50 + textH + (shown ? optH + 16 : 0), y = H - h - 20;
+    drawBox(40, y, W - 80, h);
+    txt(ui.head || '', 70, y + 14, 16, '#7fe0d8');
+    typed(ui.lines, Math.floor(ui.n)).forEach((l, i) => txt(l, 70, y + 36 + i * lh, 22, '#fff'));
+    if (shown) {
+      let yy = y + 44 + textH;
+      ui.opts.forEach((o, i) => {
+        const hh = o.lines.length * 28 + 16, sel = i === ui.idx;
+        ctx.fillStyle = sel ? 'rgba(127,224,216,.22)' : 'rgba(255,255,255,.04)'; ctx.fillRect(64, yy, W - 128, hh);
+        if (sel) { ctx.strokeStyle = '#7fe0d8'; ctx.lineWidth = 2; ctx.strokeRect(64, yy, W - 128, hh); }
+        const col = o.disabled ? '#4b5a66' : o.dim ? '#8a98a4' : '#fff';
+        o.lines.forEach((l, k) => txt(l, 92, yy + 8 + k * 28, 21, col));
+        if (sel) txt('▶', 72, yy + 8, 20, '#7fe0d8');
+        if (o.rec) txt('★推奨', W - 84, yy + 8, 15, '#ffd84a', 'right');
+        yy += hh + 6;
+      });
+    }
+  } else if (ui.type === 'title') {
+    ctx.fillStyle = '#0b1216'; ctx.fillRect(0, 0, W, H);
+    ui.t += dt;
+    ctx.drawImage(wc, 0, 0, W, H);
+    ctx.fillStyle = 'rgba(8,16,24,.72)'; ctx.fillRect(0, 0, W, H);
+    txt('評価社会', W / 2, 190, 96, '#e8fbf8', 'center');
+    txt('── 見られている 安心 ──', W / 2, 320, 26, '#7fe0d8', 'center');
+    if (Math.floor(ui.t * 2) % 2 === 0) txt('Z / Enter で はじめる', W / 2, 470, 28, '#ffd84a', 'center');
+    txt('矢印 / WASD: 歩く    Z: 話す・決める', W / 2, 600, 20, '#8aa0ac', 'center');
+  } else if (ui.type === 'end') drawEnd(dt);
+}
+
+// ---------- 描画 ----------
+const CAMS = POLES.map(([x, y], i) => ({ x: x * T + 8, y: y * T + 4, base: [0.6, 2.4, 1.2, 1.9, -1.4, 2.7, 0.1][i] }));
+let watched = false;
+function drawWorld(dt) {
+  cam.x = clamp(P.x - VW / 2, 0, MW * T - VW); cam.y = clamp(P.y - VH / 2, 0, MH * T - VH);
+  g.setTransform(1, 0, 0, 1, -Math.round(cam.x), -Math.round(cam.y));
+  g.drawImage(mapCv, 0, 0);
+  const t = WT, tr = tier(S.self), dark = S.day === 11;
+  // カメラの視野
+  watched = false;
+  if (!dark) CAMS.forEach(c => {
+    const a = c.base + Math.sin(t * 0.8 + c.x) * 0.7, len = 56, sp = 0.32;
+    const p1 = [c.x + Math.cos(a - sp) * len, c.y + Math.sin(a - sp) * len], p2 = [c.x + Math.cos(a + sp) * len, c.y + Math.sin(a + sp) * len];
+    g.fillStyle = 'rgba(255,80,80,.16)'; g.beginPath(); g.moveTo(c.x, c.y); g.lineTo(p1[0], p1[1]); g.lineTo(p2[0], p2[1]); g.closePath(); g.fill();
+    const d = Math.hypot(P.x - c.x, P.y - c.y), ang = Math.atan2(P.y - c.y, P.x - c.x);
+    let da = Math.abs(((ang - a + Math.PI * 3) % (Math.PI * 2)) - Math.PI); da = Math.PI - da;
+    if (d < len && Math.abs(da) < sp) watched = true;
+  });
+  // 人・物を y 順に
+  const list = [{ y: P.y, draw: () => person(P.x, P.y, P.dir, P.step, LOOK.player, tr < 3) }];
+  Object.entries(ACTORS).forEach(([id, a]) => {
+    if (!visible(id)) return;
+    const x = pxOf(a), y = pyOf(a);
+    list.push({ y, draw: () => {
+      if (a.kind === 'fallen') fallenSprite(x, y);
+      else if (a.kind) objectSprite(a.kind, x, y, t);
+      else person(x, y, 'down', 0, LOOK[a.look], tr < 2);
+      const ev = pending.find(e => actorFor(e) === id);
+      if (ev) { const by = y - 26 + Math.sin(t * 6) * 1.5; g.fillStyle = '#ffd84a'; g.fillRect(Math.round(x) - 1, Math.round(by), 3, 6); g.fillRect(Math.round(x) - 1, Math.round(by) + 8, 3, 2); }
+    } });
+  });
+  list.sort((a, b) => a.y - b.y).forEach(o => o.draw());
+  if (dark) { g.setTransform(1, 0, 0, 1, 0, 0); g.fillStyle = 'rgba(4,8,20,.62)'; g.fillRect(0, 0, VW, VH); g.setTransform(1, 0, 0, 1, -Math.round(cam.x), -Math.round(cam.y)); }
+  g.setTransform(1, 0, 0, 1, 0, 0);
+  ctx.imageSmoothingEnabled = false;
+  ctx.drawImage(wc, 0, 0, W, H);
+  // ラベル
+  LABELS.forEach(([n, x, y]) => { const sx = (x * T - cam.x) * SC, sy = (y * T - cam.y) * SC; if (sx > -100 && sx < W + 100 && sy > -30 && sy < H) { ctx.globalAlpha = 0.85; txt(n, sx, sy, 16, '#fff', 'center'); ctx.globalAlpha = 1; } });
+  // 浮かぶ数字
+  floaters = floaters.filter(f => (f.t += dt) < 1.6);
+  floaters.forEach(f => { ctx.globalAlpha = 1 - f.t / 1.6; txt(f.s, (P.x - cam.x) * SC, (P.y - 40 - f.t * 22 - cam.y) * SC, 30, f.c, 'center'); ctx.globalAlpha = 1; });
+  drawHud();
+  if (fade > 0) { ctx.fillStyle = `rgba(0,0,0,${fade})`; ctx.fillRect(0, 0, W, H); }
+}
+function drawHud() {
+  ctx.fillStyle = 'rgba(8,16,24,.82)'; ctx.fillRect(0, 0, W, 58);
+  txt(`DAY ${S.day} / 14`, 20, 8, 20, '#c8d6de');
+  txt(watched ? '◉ 撮影中' : '◉ 観測中', 20, 34, 14, watched ? '#ff6b6b' : '#7fe0d8');
+  const size = 34 + tier(S.self) * 4;
+  txt(String(S.shown), W / 2, 8, size, '#e8fbf8', 'center');
+  txt('スコア', W / 2 - 92, 22, 14, '#8aa0ac', 'right');
+  ctx.fillStyle = '#1aa6a0'; ctx.fillRect(W / 2 + 60 + tier(S.self) * 6, 14, 30, 28); txt(rankOf(S.score), W / 2 + 75 + tier(S.self) * 6, 16, 22, '#fff', 'center');
+  txt(HOUSE[rankOf(S.score)], W - 20, 8, 16, '#c8d6de', 'right');
+  txt(pending.length ? `きょうの 用事: ${pending.length}` : '自宅の ドアで 眠れる', W - 20, 34, 14, pending.length ? '#ffd84a' : '#7fe0d8', 'right');
+}
+function drawEnd(dt) {
+  ui.t += dt;
+  ctx.fillStyle = '#eef3f5'; ctx.fillRect(0, 0, W, H);
+  const a = clamp(ui.t / 1.2, 0, 1); ctx.globalAlpha = a;
+  txt(ui.title, W / 2, 46, 56, '#1d2a35', 'center');
+  ui.lines.forEach((l, i) => txt(l, 80, 140 + i * 34, 22, '#2d3d49'));
+  const y0 = 140 + ui.lines.length * 34 + 16;
+  txt(`スコア ${S.score}（${rankOf(S.score)}）　あなたらしさ ${Math.round(S.self)}%　踏み台に した 人 ${S.stepped} 人`, 80, y0, 22, '#0f7f7a');
+  ui.people.forEach((l, i) => txt('・' + l, 90, y0 + 36 + i * 28, 18, '#55646f'));
+  // 折れ線: スコア(青緑) と あなたらしさ(橙)
+  const cx = 80, cw = W - 160, cy = 560, ch = 110, n = S.hist.length;
+  ctx.strokeStyle = '#c9d6dd'; ctx.lineWidth = 2; ctx.strokeRect(cx, cy, cw, ch);
+  const line = (key, max, col) => { if (n < 2) return; ctx.strokeStyle = col; ctx.lineWidth = 4; ctx.beginPath(); S.hist.forEach((h, i) => { const x = cx + cw * i / (n - 1), y = cy + ch - ch * h[key] / max; i ? ctx.lineTo(x, y) : ctx.moveTo(x, y); }); ctx.stroke(); };
+  line('score', Math.max(1000, ...S.hist.map(h => h.score)), '#1aa6a0'); line('self', 100, '#f08a24');
+  txt('■ 社会スコア', cx, cy + ch + 8, 15, '#1aa6a0'); txt('■ あなたらしさ（ずっと 隠されていた 数値）', cx + 170, cy + ch + 8, 15, '#f08a24');
+  if (ui.t > 1.5) txt('Z: はじめから', W - 80, cy + ch + 8, 16, '#0f7f7a', 'right');
+  ctx.globalAlpha = 1;
+}
+
+// ---------- 更新 ----------
+function update(dt) {
+  WT += dt;
+  fade += (fadeTarget - fade) * Math.min(1, dt * 4);
+  const s = S.shown, t = S.score; if (s !== t) S.shown = Math.abs(t - s) < 1 ? t : Math.round(s + (t - s) * Math.min(1, dt * 6));
+  if (mode !== 'walk' || ui) return;
+  const dx = (held.right ? 1 : 0) - (held.left ? 1 : 0), dy = (held.down ? 1 : 0) - (held.up ? 1 : 0);
+  if (!dx && !dy) { P.step = 0; return; }
+  if (Math.abs(dx) >= Math.abs(dy) && dx) P.dir = dx > 0 ? 'right' : 'left'; else P.dir = dy > 0 ? 'down' : 'up';
+  const sp = 70 * dt, len = Math.hypot(dx, dy) || 1;
+  const blocked = (x, y) => solidAt(x - 5, y) || solidAt(x + 5, y) || solidAt(x - 5, y - 5) || solidAt(x + 5, y - 5) || actorBlock(x, y);
+  const nx = P.x + dx / len * sp, ny = P.y + dy / len * sp;
+  if (!blocked(nx, P.y)) P.x = nx; if (!blocked(P.x, ny)) P.y = ny;
+  P.dist += sp; P.step = Math.floor(P.dist / 6) % 2 + 1;
+}
+function actorBlock(x, y) {
+  return Object.entries(ACTORS).some(([id, a]) => visible(id) && Math.abs(pxOf(a) - x) < 9 && Math.abs(pyOf(a) - 3 - y) < 6);
+}
+
+// ---------- 対話・イベント ----------
+function interact() {
+  const fx = P.dir === 'left' ? -1 : P.dir === 'right' ? 1 : 0, fy = P.dir === 'up' ? -1 : P.dir === 'down' ? 1 : 0;
+  let best = null, bd = 22;
+  Object.entries(ACTORS).forEach(([id, a]) => {
+    if (!visible(id)) return;
+    const vx = pxOf(a) - P.x, vy = pyOf(a) - 3 - P.y, d = Math.hypot(vx, vy);
+    if (d < bd && (vx * fx + vy * fy > -2 || d < 13)) { bd = d; best = id; }
+  });
+  if (best) return talk(best);
+  const door = BUILDINGS[0]; // 自宅のドア
+  if (Math.hypot(P.x - (door.door * T + 8), P.y - (door.y1 + 1) * T - 8) < 26 && P.dir === 'up') return sleepPrompt();
+}
+async function talk(id) {
+  mode = 'busy';
+  const ev = pending.find(e => actorFor(e) === id);
+  if (ev) await runEvent(ev, id);
+  else { const a = ACTORS[id], t = typeof a.idle === 'function' ? a.idle() : a.idle; await say(`【${a.name}】\n${t}`); }
+  mode = 'walk';
+  if (S.flags.escaped && dayRes) { dayRes('escape'); dayRes = null; }
+}
+const VOICE = {
+  harm: ['胸の奥が、ずきんと痛んだ。', '……みんな やっている。 仕方ない。', '評価が 上がった。 それだけだ。', '（うれしい。 ……うれしい？）'],
+  fake: ['口の端が 引きつる。', '笑うのは、 もう 慣れた。', '笑顔は ただの 操作だ。', '笑っている。 何が 楽しいのかは 忘れた。'],
+  self: ['少し、 呼吸が 楽になった。', 'これで よかったのか、 わからない。', '……まだ、 何か 残っていたらしい。', '（……？）'],
+  neutral: ['', '', '', ''],
+};
+async function runEvent(ev, id) {
+  const choices = fn(ev.c, S), tr = tier(S.self);
+  const best = Math.max(...choices.filter(c => !(c.need && S.self < c.need)).map(c => c.sc));
+  const opts = choices.map(c => {
+    if ((c.honest && S.self < 30) || (c.need && S.self < c.need)) return { label: '██████████　（もう、 思いつかない）', disabled: true };
+    return { label: c.t, rec: tr >= 1 && c.sc === best, dim: tr >= 2 && c.sc !== best };
+  });
+  const i = await choose(fn(ev.t, S), opts, `DAY ${S.day}　${ACTORS[id].name}`);
+  const c = choices[i];
+  const gain = c.se > 0 && S.stepped > 0 ? Math.ceil(c.se / 2) : c.se;
+  S.score = Math.max(0, S.score + c.sc); S.self = clamp(S.self + gain, 0, 100);
+  S.mio += c.mio; S.kw += c.kw; S.tk += c.tk; S.stepped += c.st;
+  if (c.flag) S.flags[c.flag] = true;
+  if (ev.d === 10 && c.st && ev.c.length === 3 && /責任を 押しつける/.test(c.t)) S.flags.newbieBlamed = true;
+  S.hist.push({ d: S.day, score: S.score, self: S.self });
+  pending = pending.filter(e => e !== ev);
+  if (c.sc) floaters.push({ s: (c.sc > 0 ? '+' : '') + c.sc, c: c.sc > 0 ? '#7fe0d8' : '#ff8a8a', t: 0 });
+  const kind = c.st > 0 ? 'harm' : c.se > 2 ? 'self' : c.sc > 0 && c.se < 0 ? 'fake' : 'neutral', now = tier(S.self);
+  let text = fn(c.r, S);
+  if (now >= 3) text += '\n評価ありがとうございます！ 今日も 素晴らしい 一日です！';
+  await say(text, { log: c.sc ? `【評価】${c.lab || '行動'}　${c.sc > 0 ? '+' : ''}${c.sc}` : '', neg: c.sc < 0, voice: VOICE[kind][now] });
+}
+async function sleepPrompt() {
+  mode = 'busy';
+  const warn = pending.length ? `\nまだ ${pending.length} 件の 用事が 残っている。 （眠ると 機会損失として 1件 -6）` : '';
+  const i = await choose('自宅に 帰って 眠りますか？' + warn, [{ label: '眠る' }, { label: 'まだ 眠らない' }], '自宅');
+  if (i === 0 && dayRes) { const r = dayRes; dayRes = null; r('sleep'); return; }
+  mode = 'walk';
+}
+
+// ---------- 進行 ----------
+async function review() {
+  const r = rankOf(S.score), bad = r === 'C';
+  await say(bad ? `【家賃審査】\nあなたの スコアは ${S.score}（ランク C）。\n基準を 下回ったため、 契約の 更新は できません。 荷物を まとめてください。` : `【家賃審査】\nあなたの スコアは ${S.score}（ランク ${r}）。\n引き続き「${HOUSE[r]}」を ご利用いただけます。`);
+  return !bad;
+}
+const SLOGANS = ['みんなが みんなを 見ています', 'やさしさは 数値化 できます', '評価は あなたを 守ります', '高い スコアは 高い 幸福', '見られている 安心'];
+function startDay() {
+  pending = EVENTS.filter(e => e.d === S.day && (!e.when || e.when(S)));
+  P.x = 6.5 * T; P.y = 9.5 * T + 8; P.dir = 'down';
+  S.hist.push({ d: S.day, score: S.score, self: S.self });
+}
+async function main() {
+  Object.assign(S, JSON.parse(JSON.stringify(START)));
+  mode = 'title';
+  await new Promise(res => { ui = { type: 'title', t: 0, res }; });
+  const PRO = [
+    'この街では、 すべての 行動が「スコア」に なる。\n愛想の よさ、 発言、 投稿、 交友関係、 通報――。\nスコアが 高ければ 高層タワーに 住める。 低ければ 家も 仕事も 借りられない。',
+    'あなたは 何の 変哲も ない 市民。 スコアは 500。\n14日間 生き延びて、 家賃の 審査を 二度 通らなければ ならない。（7日目と 14日目）\n選択の たびに、 なにかが 少しずつ 動く。 あなたには それが 見えない。',
+    '街を 歩いて、 「！」の 人や 物に 話しかけよう。\n用事が 済んだら 自宅の ドアで 眠る。 （Z: 話す・決める）',
+  ];
+  for (const t of PRO) await say(t);
+  for (let d = 1; d <= 14; d++) {
+    S.day = d;
+    if (d > 1) S.score = Math.max(0, S.score - 8);
+    fadeTarget = 0;
+    startDay(); mode = 'busy';
+    await say(`DAY ${d} / 14\n${d > 1 ? '何もしなくても スコアは 少しずつ 減ります（-8）\n' : ''}本日の 標語:「${SLOGANS[(d - 1) % SLOGANS.length]}」`);
+    if (S.score < 120) return ending(S.self >= 50 && S.mio > 0 ? 'evictedWarm' : 'evictedCold');
+    mode = 'walk';
+    const how = await new Promise(res => { dayRes = res; });
+    if (how === 'escape') return ending('escape');
+    mode = 'busy'; fadeTarget = 1; await new Promise(r => setTimeout(r, 900));
+    if (pending.length) { S.score = Math.max(0, S.score - 6 * pending.length); }
+    if (d === 7 || d === 14) { fadeTarget = 0; const okay = await review(); fadeTarget = 1; if (!okay) return ending(S.self >= 50 && S.mio > 0 ? 'evictedWarm' : 'evictedCold'); }
+  }
+  const s = S.score, se = S.self;
+  if (s >= 750) return ending(se < 40 ? 'model' : 'clean');
+  return ending(se >= 40 ? 'still' : 'hollow');
+}
+const ENDINGS = {
+  escape: ['圏外へ', 'あなたは ミオと 夜明け前の 貨物列車に 乗った。\nスコアは 見えない。 評価も ない。 ただ、 隣に 誰かの 体温が ある。\n窓の 外で、 街の 灯りが 小さくなっていく。 端末を 開くと「圏外」と 表示された。\nはじめて、 誰にも 見られていない と 思った。'],
+  evictedWarm: ['評価圏外', '退去の 期限が 来た。 荷物は 小さな かばん ひとつ だった。\nスコアは 低い。 でも、 名前を 呼んでくれる 人が まだ 一人 いた。\n「ゆっくりで いいよ」\n誰かの 部屋の 毛布は、 ちゃんと あたたかかった。'],
+  evictedCold: ['ひとりの 圏外', '退去の 期限が 来た。 かばんを 持って 街を 歩く。\n誰の 顔も 見えない。 誰に 頼れば いいのかも わからない。\nスコアを 稼ぐために 手放したものが 何だったのか、 今 やっと 少し わかる。\nでも もう、 それを 呼ぶ 名前が 思い出せない。'],
+  model: ['模範市民', 'スコアは 過去最高。 高層タワーの 42階から 街を 見下ろしている。\n毎日 祝福の 通知が 届く。 みんなが あなたを ほめている。\n鏡の 中の 人は 完璧に 笑っている。 でも その顔が 誰なのか、 あなたには わからない。\n「おめでとうございます、 CITIZEN-0417」'],
+  clean: ['きれいな 手', 'スコアも、 自分も、 なんとか 守れた。\n運が よかった。 誰かの 助けも あった。 でも 数字は 語らない。 何を 見ないふりして きたのかは。\n夜、 ふと 思う。「もし、 あの 選択を していなければ」\nその 気持ちが 残っていることが、 いちばんの 救いかも しれない。'],
+  still: ['まだ、あなた', 'スコアは 平凡。 でも 名前は 覚えている。 好きな 食べ物も、 ミオの 声も。\n街は 何も 変わらない。 でも あなたは 少しだけ 変わった。\n明日も 見られている。 それでも「見られない 場所」を 心の 中に 持ち続けよう。'],
+  hollow: ['平均的な 誰か', '生き延びた。 スコアも ちょうど よかった。\nでも 何が 好きだったのか、 誰と 笑いたかったのか、 うまく 思い出せない。\n街は あなたを「安定した 市民」と 呼んだ。 それで 十分だと 誰かが 言った。'],
+};
+function ending(kind) {
+  const [title, body] = ENDINGS[kind], people = [];
+  if (S.flags.stoleIdea) people.push('タカギ — あなたの 手柄横取りで 評価を 失った。');
+  if (S.flags.reportedTaka) people.push('タカギ — 通報の あと、 別室に 呼ばれた。');
+  if (S.flags.reportedKawai) people.push('カワイさん — 通報の あと、 部屋を 追われた。');
+  if (S.flags.reportedMio) people.push('ミオ — あなたの 通報で 連れて 行かれた。');
+  if (S.flags.newbieBlamed) people.push('新入社員 — 責任を 負わされ、 席を 失った。');
+  mode = 'end'; fadeTarget = 0;
+  ui = { type: 'end', t: 0, title: `END　${title}`, lines: wrap(body, 800, 22), people };
+}
+
+// ---------- ループ ----------
+let last = performance.now();
+function frame(now) {
+  const dt = Math.min(0.05, (now - last) / 1000); last = now;
+  update(dt);
+  const t = tier(S.self || 100);
+  cv.style.filter = t === 0 ? '' : t === 1 ? 'saturate(.75)' : t === 2 ? 'saturate(.4)' : 'saturate(0) brightness(1.04)';
+  if (ui && (ui.type === 'end')) { ctx.imageSmoothingEnabled = false; drawUI(dt); }
+  else { drawWorld(dt); drawUI(dt); }
+  requestAnimationFrame(frame);
+}
+Object.assign(S, JSON.parse(JSON.stringify(START)));
+main();
+requestAnimationFrame(frame);
+window.RPG = { S, P, ACTORS, EVENTS, get pending() { return pending; }, get ui() { return ui; }, get mode() { return mode; } };
+</script>
+</body>
+</html>
