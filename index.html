@@ -1,0 +1,32 @@
+<!DOCTYPE html>
+<html lang="ja">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1, user-scalable=no">
+<title>ももんがの夜の森</title>
+<style>
+  @import url('https://fonts.googleapis.com/css2?family=DotGothic16&display=swap');
+  html, body { margin: 0; height: 100%; background: #070b1f; overflow: hidden; }
+  body { display: flex; align-items: center; justify-content: center; touch-action: none; user-select: none; -webkit-user-select: none; }
+  #wrap { position: relative; width: min(100vw, 100vh * 16 / 9); aspect-ratio: 16 / 9; }
+  canvas { width: 100%; height: 100%; display: block; image-rendering: pixelated; background: #0a1030; }
+  .pad { position: absolute; bottom: 4%; display: none; gap: 2%; }
+  .pad.l { left: 3%; } .pad.r { right: 3%; }
+  .pad button {
+    width: 13vmin; height: 13vmin; border-radius: 16px; border: 2px solid #8b93d8;
+    background: rgba(60, 70, 140, .55); color: #e8ecff; font: 700 5vmin/1 'DotGothic16', sans-serif;
+    touch-action: none;
+  }
+  .pad button.on { background: rgba(120, 140, 240, .8); }
+  @media (pointer: coarse) { .pad { display: flex; } }
+</style>
+</head>
+<body>
+<div id="wrap">
+  <canvas id="game" width="480" height="270"></canvas>
+  <div class="pad l"><button data-k="ArrowLeft">◀</button><button data-k="ArrowRight">▶</button></div>
+  <div class="pad r"><button data-k="KeyZ">滑空</button><button data-k="ArrowUp">▲</button></div>
+</div>
+<script src="game.js"></script>
+</body>
+</html>
