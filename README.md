@@ -23,3 +23,6 @@
 
 ## もう1本: ログアウトできない街
 弾幕×対話RPG。`logout-town/index.html` をブラウザで開いて遊べます（詳細は `logout-town/README.md`）。
+
+## もう1本: 評価社会
+選択型シミュレーション。`hyoka-shakai/index.html` をブラウザで開いて遊べます（詳細は `hyoka-shakai/README.md`）。

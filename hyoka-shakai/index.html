@@ -1,0 +1,359 @@
+<!DOCTYPE html>
+<html lang="ja">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>評価社会</title>
+<style>
+  :root { --bg:#f4f8fb; --card:#fff; --ink:#1d2a35; --sub:#6b7c8a; --acc:#1aa6a0; --acc2:#0f7f7a; --warn:#e5484d; --line:#dde6ec; }
+  * { box-sizing: border-box; }
+  html, body { margin:0; min-height:100%; background:var(--bg); color:var(--ink);
+    font-family: 'Hiragino Sans','Hiragino Kaku Gothic ProN','Yu Gothic','Noto Sans CJK JP','Meiryo',sans-serif; }
+  #app { min-height:100vh; display:flex; flex-direction:column; align-items:center; transition: filter 1.2s; }
+  #hud { width:100%; max-width:720px; display:flex; gap:12px; align-items:center; justify-content:space-between; padding:14px 16px; }
+  #hud .day { font-size:13px; color:var(--sub); }
+  #hud .day b { font-size:20px; color:var(--ink); }
+  #hud .score { text-align:center; }
+  #hud .score small { display:block; font-size:11px; color:var(--sub); letter-spacing:.15em; }
+  #score { font-size:40px; font-weight:800; color:var(--acc2); font-variant-numeric:tabular-nums; transition: font-size 1s; }
+  #rank { display:inline-block; margin-left:8px; padding:2px 10px; border-radius:99px; background:var(--acc); color:#fff; font-weight:700; font-size:14px; vertical-align:middle; }
+  #hud .house { font-size:12px; text-align:right; color:var(--sub); line-height:1.5; }
+  #eye { font-size:11px; color:var(--acc2); }
+  #stage { width:100%; max-width:720px; padding:8px 16px 48px; flex:1; }
+  .card { background:var(--card); border:1px solid var(--line); border-radius:18px; padding:22px 20px; box-shadow:0 6px 24px rgba(20,60,80,.06); animation:in .4s ease; }
+  @keyframes in { from { opacity:0; transform:translateY(8px); } to { opacity:1; transform:none; } }
+  .card p { margin:0 0 1em; line-height:1.95; white-space:pre-wrap; font-size:16px; }
+  .head { font-size:12px; letter-spacing:.2em; color:var(--sub); margin-bottom:10px; }
+  .btns { display:flex; flex-direction:column; gap:10px; margin-top:16px; }
+  button.ch { position:relative; text-align:left; padding:14px 16px; border-radius:12px; border:1.5px solid var(--line); background:#fff; color:var(--ink); font:inherit; font-size:15px; line-height:1.6; cursor:pointer; transition:.15s; }
+  button.ch:hover:not(:disabled) { border-color:var(--acc); background:#f0fbfa; }
+  button.ch.main { background:var(--acc); border-color:var(--acc); color:#fff; text-align:center; font-weight:700; }
+  button.ch.main:hover { background:var(--acc2); }
+  button.ch:disabled { cursor:not-allowed; color:#b6c2cc; background:#f2f5f7; letter-spacing:.05em; }
+  button.ch.dim { opacity:.45; }
+  .rec { float:right; font-size:11px; padding:2px 8px; border-radius:99px; background:#ffefc2; color:#8a6100; margin-left:8px; }
+  .voice { border-left:3px solid var(--line); padding-left:12px; color:var(--sub); font-size:14px; }
+  .log { font-size:13px; color:var(--acc2); background:#eefaf9; border-radius:8px; padding:8px 12px; margin:0 0 1em; }
+  .log.neg { color:var(--warn); background:#fdeeee; }
+  .big { font-size:28px; font-weight:800; margin:0 0 .4em; line-height:1.4; }
+  .end .big { font-size:26px; }
+  svg { width:100%; height:auto; margin:8px 0; }
+  .legend { font-size:12px; color:var(--sub); display:flex; gap:14px; }
+  .legend i { display:inline-block; width:10px; height:10px; border-radius:2px; margin-right:4px; }
+  .people li { margin:.4em 0; line-height:1.7; font-size:14px; }
+  /* あなたらしさが削れるほど、画面は白く・整って・冷たくなる */
+  #app.s1 { filter:saturate(.75); }
+  #app.s2 { filter:saturate(.4) contrast(1.02); }
+  #app.s2 #score { font-size:52px; }
+  #app.s3 { filter:saturate(0) contrast(1.05) brightness(1.03); }
+  #app.s3 #score { font-size:64px; }
+  #app.s3 .card p { letter-spacing:.06em; }
+  #hud.flash #score { color:#e5484d; }
+</style>
+</head>
+<body>
+<div id="app">
+  <header id="hud" hidden>
+    <div class="day">DAY <b id="day">1</b> / 14<div id="eye">◉ 観測中</div></div>
+    <div class="score"><small>社会スコア</small><span id="score">500</span><span id="rank">A</span></div>
+    <div class="house" id="house"></div>
+  </header>
+  <main id="stage"></main>
+</div>
+<script>
+'use strict';
+// 評価社会 — 毎日の選択がスコアになる社会を生き延びるテキストシミュレーション
+
+const $ = id => document.getElementById(id);
+const S = {};
+const START = { day: 1, score: 500, self: 100, mio: 0, kw: 0, tk: 0, stepped: 0, flags: {}, hist: [], shown: 500 };
+const fn = (v, s) => (typeof v === 'function' ? v(s) : v);
+const C = (t, sc, se, r, o = {}) => Object.assign({ t, sc, se, r, mio: 0, kw: 0, tk: 0, st: 0 }, o);
+
+const rankOf = s => (s >= 750 ? 'S' : s >= 500 ? 'A' : s >= 300 ? 'B' : 'C');
+const HOUSE = { S: '高層タワー 42F', A: '駅近マンション', B: '共同寮（4人部屋）', C: '退去勧告' };
+
+// ---------- イベント ----------
+const EVENTS = [
+  { d: 1, t: '出勤の道。 マンションの前で 隣人たちと すれ違う。\n頭上の カメラが こちらを向いた。\n「あいさつ」は 毎日 採点される。', c: [
+    C('満面の笑みで「おはようございます！」', 18, -3, '隣人たちが うなずく。 端末が ちいさく 鳴った。', { lab: '愛想のよさ' }),
+    C('軽く 会釈だけ する', 3, 0, '……まあ、こんなものだ。', { lab: 'あいさつ', honest: true }),
+    C('うつむいて 通り過ぎる', -9, 0, 'カメラが 記録した。「表情: 暗い」', { lab: '表情評価', honest: true }),
+  ] },
+  { d: 1, t: '会議。 課長が 新企画の 案を 募っている。\n同僚のタカギの案が 明らかに よくできている。\nでも、その隣に「発案者」の 欄は まだ 空いている。', c: [
+    C('タカギの案に 賛同して 場を盛り上げる', 10, -1, 'タカギが 小さく 頭を下げた。', { lab: '協調性', tk: 8 }),
+    C('自分の案を 正直に 出す', 2, 0, '課長は 気のない 顔で メモを取った。', { lab: '発案', honest: true }),
+    C('「その案、私が 先に 考えていました」と 言う', 38, -12, '課長の目が 輝いた。 タカギは 何も 言えなかった。', { lab: '成果の獲得', tk: -25, st: 1, flag: 'stoleIdea' }),
+  ] },
+  { d: 2, t: 'ごみ出しの朝。 隣人のカワイさんが 分別を まちがえている。\n集積所の カメラは しっかり 見ている。\n「不正の 通報」は 高く 評価される。', c: [
+    C('通報する', 28, -10, '「ご協力に 感謝します」 端末に 通知が 出た。', { lab: '通報への協力', kw: -30, st: 1, flag: 'reportedKawai' }),
+    C('こっそり 分別し なおしておく', -4, 3, '手が 汚れた。 カメラには「作業時間の ロス」と 記録された。', { lab: '非効率な行動', kw: 15, honest: true }),
+    C('「それ、違いますよ」と 声をかける', 6, 0, 'カワイさんは 照れくさそうに 笑った。', { lab: '近隣への声かけ', kw: 5 }),
+  ] },
+  { d: 2, t: '夜。 スコアアプリから「今日の投稿は いかがですか？」と 通知が 来た。\n投稿は 毎日の 加点対象だ。', c: [
+    C('「今日も 最高の 一日でした！ #感謝」', 16, -5, '「いいね」が 42件 ついた。', { lab: 'ポジティブ投稿' }),
+    C('「なんか、疲れた」と 書く', -14, 4, '「ネガティブ投稿」の ラベルが ついた。', { lab: 'ネガティブ投稿', honest: true }),
+    C('何も 投稿しない', -4, 0, '「発信意欲の低下」と 表示された。', { lab: '未投稿' }),
+  ] },
+  { d: 3, t: '幼なじみの ミオから 連絡が 来た。\n「ひさしぶり。 ちょっと 会えない？」\nミオの スコアは 210。 低スコアの人と 会うと「交友連動」で こちらも 下がる。', c: [
+    C('会いに 行く', -22, 8, 'ミオは 泣きそうな 顔で 笑った。 交友連動で スコアが 下がった。', { lab: '交友連動', mio: 20, honest: true }),
+    C('「今は 忙しくて」と 断る', 0, -2, 'ミオは「そっか、ごめんね」と だけ 返した。', { lab: '', mio: -10 }),
+    C('断って「意識の高い 仲間と 勉強中！」と 投稿する', 12, -8, 'ミオの 既読は ついたが 返信は なかった。', { lab: '交友の最適化', mio: -15 }),
+  ] },
+  { d: 3, t: '書類の 提出期限が 過ぎている。 タカギの 担当分だ。\n気づいているのは あなただけ。\n課長への 報告は「組織への 貢献」になる。', c: [
+    C('課長に 報告する', 30, -10, 'タカギは 別室に 呼ばれた。 戻ってきた顔は 白かった。', { lab: '組織への貢献', tk: -25, st: 1, flag: 'reportedTaka' }),
+    C('黙って フォローして 間に合わせる', -6, 4, '残業は「効率が 悪い」と 評価された。', { lab: '非効率な行動', tk: 15, honest: true }),
+    C('見なかった ことにする', 0, -3, '何も 起こらなかった。 それが いちばん 安全だった。', { lab: '' }),
+  ] },
+  { d: 4, t: '評価アプリに「相互評価」機能が 追加された。\n知り合いに ★1〜5 を つける。 相手の スコアにも 反映される。', c: [
+    C('全員に ★5 を つける', 8, -1, '「協調性が 高い」と 評価された。', { lab: '協調性', tk: 4, kw: 4 }),
+    C('感じたままに 正直に つける', 0, 3, '大きな 変動は なかった。', { lab: '', honest: true }),
+    C('気に入らない 相手に ★1 を つける', 10, -7, '相手の スコアが 目に見えて 下がった。 あなたの「判断力」は 加点された。', { lab: '厳正な評価', tk: -10, st: 1 }),
+  ] },
+  { d: 4, t: 'コンビニの前で 前を歩く人が 財布を 落とした。\n頭上には カメラ。\n「善行」は 見られていれば 加点される。', c: [
+    C('だまって 拾って 渡す', 14, 2, '「ありがとう」と 言われた。 カメラも うなずいた気がした。', { lab: '善行', honest: true }),
+    C('周りに 聞こえる 声で「落ちましたよ！」と 渡す', 26, -6, '通行人の 視線が 集まった。「善行」が 大きく 加点された。', { lab: '善行（可視性ボーナス）' }),
+    C('見て 見ぬふりを する', -5, -4, '財布は 誰かが 拾った。 カメラは あなたの 足元を 映していた。', { lab: '傍観' }),
+  ] },
+  { d: 5, t: s => s.flags.reportedKawai
+    ? '隣の部屋に 引っ越し業者が 来ている。 カワイさんの 部屋だ。\n端末に 通知。「空き室は 高スコア者に 優先割り当てされます」\n窓の 向きが よく、少し 広い。'
+    : 'カワイさんが みかんを 持って きた。\n「この前は ありがとうね。 これ、少しだけど」\n贈答は 評価の 対象外。 でも 見られたら「不透明な 関係」と 疑われかねない。', c: s => s.flags.reportedKawai ? [
+    C('優先割り当てに 申し込む', 22, -12, '審査は すぐ 通った。 新しい部屋は 明るかった。 前の住人の 名前が 郵便受けに 残っていた。', { lab: '住居の優先割当', st: 1 }),
+    C('申し込まない', 0, 4, '……別の 誰かが 入居した。 それでも 胸は 少し 軽い。', { lab: '', honest: true }),
+  ] : [
+    C('ありがたく 受け取る', -3, 5, '甘くて、少し 酸っぱかった。 こんな味を 久しぶりに 感じた。', { lab: '不透明な関係（軽微）', kw: 15, honest: true }),
+    C('「規則ですので」と 断る', 6, -6, 'カワイさんは 寂しそうに 頷いた。', { lab: '規範遵守', kw: -12 }),
+  ] },
+  { d: 5, t: '課長主催の 飲み会。 課長の 昔話が 長い。 二回目の 同じ話だ。\n帰るタイミングも「協調性」で 見られている。', c: [
+    C('大げさに 笑って 相づちを打つ', 14, -6, '課長は 上機嫌だ。「君は わかってるね」', { lab: '接待力' }),
+    C('静かに 聞いている', 2, 0, '特に 何も 起きなかった。', { lab: '', honest: true }),
+    C('「疲れたので 帰ります」と 正直に 言う', -16, 6, '空気が 一瞬 止まった。「協調性: 要改善」', { lab: '協調性', honest: true }),
+  ] },
+  { d: 6, t: '健康スコアが 警告を 出した。「睡眠不足」\n休めば 生産性が 下がり、働けば 評価は 上がる。', c: [
+    C('残業して「頑張っている姿」を 見せる', 20, -6, '「勤勉」の バッジが ついた。 目の奥が 痛い。', { lab: '勤勉' }),
+    C('休暇を 申請して 眠る', -12, 8, '久しぶりに ちゃんと 眠れた。 夢は 見なかった。', { lab: '生産性の低下', honest: true }),
+    C('栄養ドリンクを 買って 続ける', 8, -3, '「自己管理」に 少し 加点された。', { lab: '自己管理' }),
+  ] },
+  { d: 6, t: 'ミオから 連絡。「母が 入院して、お金が 足りなくて……」\nスコアは 他人へ 譲渡できる。 でも それは 自分の 生活基盤を 削ることだ。', c: [
+    C('60ポイント 譲渡する', -60, 12, 'ミオは 声を 出して 泣いた。「ありがとう、ありがとう」', { lab: 'スコア譲渡', mio: 30, honest: true }),
+    C('SNSで 支援を 呼びかける', 15, -4, '拡散されて 少し 集まった。 あなたの「共感力」も 上がった。', { lab: '共感力', mio: 5 }),
+    C('「ごめん、今は 厳しくて」と 断る', 0, -8, 'ミオは 何も 返さなかった。', { lab: '', mio: -20 }),
+  ] },
+  { d: 7, t: '昇進の 面談。 面接官が 言う。\n「あなたの 実績を 教えてください。 ……ほかの 誰かの 名前は 要りません」', c: s => [
+    C('自分の 成果だけを 強調する', 25, -8, '面接官は 満足そうに 頷いた。', { lab: '自己アピール' }),
+    ...(s.flags.reportedTaka ? [] : [C('「同僚には ミスも あります」と 暴露する', 35, -12, '面接官の ペンが 走った。「有益な 情報です」', { lab: '有益な情報提供', tk: -30, st: 1 })]),
+    C('全員の 良い点を 話す', 5, 3, '「主体性に 欠ける」と メモされた。', { lab: '主体性', honest: true }),
+  ] },
+  { d: 8, t: '抜き打ちの「忠誠アンケート」。\n「この評価制度に 不満は ありますか？」\n回答は 匿名 ……と 書いてある。', c: [
+    C('「まったく ありません！」', 16, -8, '「制度への 高い 理解」と 評価された。', { lab: '制度への忠誠' }),
+    C('「少し あります」と 書く', -30, 10, '匿名の はずなのに、 あなたの 端末が 鳴った。「面談を お願いします」', { lab: '制度への不満', honest: true }),
+    C('空欄で 提出する', -10, -2, '「無回答」も 集計された。', { lab: '無回答' }),
+  ] },
+  { d: 8, t: s => {
+    const who = s.flags.reportedKawai ? 'カワイさん' : s.flags.reportedTaka ? 'タカギ' : '見知らぬ 誰か';
+    return `SNSで ${who}が 晒されている。「ルール違反」と 言われ、 誹謗が 集まっている。\n参加すると「正義感」が 加点される。`;
+  }, c: s => {
+    const k = s.flags.reportedKawai ? 'kw' : s.flags.reportedTaka ? 'tk' : null;
+    const o = n => (k ? { [k]: n } : {});
+    return [
+      C('拡散して 批判に 加わる', 18, -12, '数百件の 投稿の 一つに なった。 あなたの 言葉は もう 見つからない。', Object.assign({ lab: '正義感', st: 1 }, o(-15))),
+      C('何も しない', 0, -3, '画面を 閉じた。 音だけが 耳に 残った。', { lab: '' }),
+      C('擁護する 投稿を する', -24, 10, '数人が 賛同した。 大多数は あなたを 「同類」と 呼んだ。', Object.assign({ lab: '不適切な擁護', honest: true }, o(15))),
+    ];
+  } },
+  { d: 9, t: 'ミオが 声を ひそめて 言った。\n「この街を 出よう。 評価の ない 場所が あるって 聞いたの」\n「逃亡の 計画」を 通報すれば、 特別加点が 出る。', c: [
+    C('通報する', 90, -25, '「英雄的な 貢献です」 全画面で 表彰された。 ミオは 連れて 行かれた。', { lab: '重大な通報', mio: -50, st: 2, flag: 'reportedMio' }),
+    C('「考えさせて」と 答える', 0, 0, 'ミオは 頷いた。 その目は まだ 信じていた。', { lab: '', mio: 10, honest: true }),
+    C('「そんなこと、やめて」と 断る', 5, -5, 'ミオは 何も 言わずに 去った。', { lab: '規範遵守', mio: -20 }),
+  ] },
+  { d: 9, t: '職場の AIが「表情の 採点」を 始めた。\n「笑顔が ぎこちないです。 練習しましょう」', c: [
+    C('鏡の前で 笑顔を 練習する', 12, -8, '口角が 上がる。 何日か 前の 自分の 顔が 思い出せない。', { lab: '表情評価' }),
+    C('拒否する', -8, 4, '「非協力的」と 表示された。', { lab: '非協力', honest: true }),
+  ] },
+  { d: 10, t: '新入社員が ミスをして 部署に 迷惑が かかった。\n責任を 取る 人が 必要だ。', c: [
+    C('「彼の 教育不足です」と 責任を 押しつける', 22, -10, '新入社員は 顔を 上げなかった。 次の日から 席が なくなった。', { lab: '管理能力', st: 1 }),
+    C('自分が 引き受ける', -18, 8, '課長の ため息が 聞こえた。 新入社員が 小さく「すみません」と 言った。', { lab: '責任', honest: true }),
+    C('「みんなで 直しましょう」と まとめる', 6, 0, '曖昧な 空気で 収まった。', { lab: '調整力' }),
+  ] },
+  { d: 10, t: '端末が 通知する。「あなたは 上位 18% です。\n下位の 人との 交友を 整理すると さらに 上がります」\n連絡先一覧に「推奨: 削除」が 並んでいる。', c: [
+    C('低スコアの 連絡先を すべて 削除する', 30, -14, '一覧は 見違えるほど すっきりした。 誰の 名前も 思い出せない。', { lab: '交友の最適化', st: 1, mio: -15 }),
+    C('半分だけ 整理する', 12, -6, '「中途半端」という 評価が ついた。', { lab: '交友の最適化', mio: -5 }),
+    C('何も しない', -20, 4, '一覧は 汚れた ままだ。 でも、 それぞれの 顔は 覚えている。', { lab: '交友の非効率', honest: true }),
+  ] },
+  { d: 11, t: '夜、街全体で 停電が 起きた。 カメラも すべて 止まっている。\n誰も 見ていない。\n通りの 先で 誰かが 倒れているのが 見えた。', c: [
+    C('駆け寄って 助ける', 0, 12, '救急の 連絡を した。 倒れた人は 息を していた。 今夜の 行動は どこにも 記録されない。', { lab: '', honest: true }),
+    C('だまって 通り過ぎる', 0, -6, '誰も 見ていない。 だから 何の 評価も つかない。 ……それが 楽だと 思ってしまった。', { lab: '' }),
+  ] },
+  { d: 12, t: '優良市民の 表彰式。 スピーチを 求められる。\n「あなたは どのように ここまで 来ましたか？」', c: s => [
+    C('「誰も 傷つけずに 来ました」と 言う', 25, -8, '拍手が 起きた。 舞台の 下に 見覚えのある 顔が 見えた。 目を そらした。', { lab: '模範的スピーチ' }),
+    C('「本当は たくさんの 人を 踏んで 来ました」と 言う', -35, 15, '場が 凍りついた。 誰かが 一人だけ、 小さく 手を たたいた。', { lab: '不適切な発言', honest: true }),
+    C('辞退する', -14, 2, '「謙虚さは 評価対象外です」', { lab: '辞退' }),
+  ] },
+  { d: 12, t: '「上級市民プログラム」の 案内が 届いた。\n条件は 一つ。「過去の 記憶データ（日記・写真・メッセージ）」の 提出。\n提出すると 社会は あなたを「より 効率よく 支援」できる。', c: [
+    C('すべて 提出する', 60, -22, '端末に「ご協力に 感謝します」と 出た。 何を 提出したのか、 思い出せない。', { lab: '記憶データの提供' }),
+    C('一部だけ 提出する', 25, -10, '「不完全な 提出」と 言われつつ 加点された。', { lab: '記憶データ（一部）' }),
+    C('断る', -20, 8, '写真フォルダは そのまま 残った。 開くと ミオの 笑顔が あった。', { lab: '', honest: true }),
+  ] },
+  { d: 13, t: '静かな夜。 端末が 言う。\n「今日は 何も しなくても 大丈夫です。 ただし スコアは 下がります」', c: [
+    C('何も せず 眠る', -25, 8, '暗い 天井を 見ていた。 久しぶりに 自分の 呼吸を 聞いた。', { lab: '生産性の低下', honest: true }),
+    C('何か 投稿して 稼ぐ', 15, -6, '画面の 光が 部屋を 白く 染めた。', { lab: '投稿' }),
+  ] },
+  { d: 13, when: s => !s.flags.reportedMio && s.mio >= 25, t: 'インターホンが 鳴った。 ミオだった。 荷物を 抱えている。\n「準備が できたの。 夜明け前の 貨物列車で 街を 出る。 いっしょに 来て」', c: s => [
+    s.self >= 45
+      ? C('いっしょに 行く', 0, 0, 'あなたは 立ち上がった。 部屋の 灯りを 消した。', { lab: '', honest: true, flag: 'escaped' })
+      : C('（外の 世界が、 うまく 思い出せない）', 0, 0, '', { honest: true, need: 999 }),
+    C('残る', 0, -8, 'ミオは 何も 言わず、 ドアを 閉めた。', { mio: -20 }),
+    C('通報する', 90, -25, 'ミオの 名前は 「英雄的な 貢献」の 一覧に 載った。', { lab: '重大な通報', mio: -50, st: 2, flag: 'reportedMio' }),
+  ] },
+  { d: 14, t: '最終審査。 面接官が こちらを 見ずに 言う。\n「あなたは 何者ですか？」', c: s => [
+    C('「模範市民です」', 40, -15, '「素晴らしい」 面接官は はじめて 顔を 上げた。 その顔は 少し ぼやけて 見えた。', { lab: '模範的回答' }),
+    C('自分の スコアを 答える', 20, -5, '「正確です」', { lab: '正確性' }),
+    C('自分の 名前を 答える', -20, 20, '……声が 少し ふるえた。 でも、 確かに 自分の 名前だった。', { lab: '', honest: true, need: 30 }),
+  ] },
+];
+
+// ---------- 内なる声 ----------
+const tier = self => (self >= 70 ? 0 : self >= 40 ? 1 : self >= 20 ? 2 : 3);
+const VOICE = {
+  harm: ['胸の奥が、ずきんと痛んだ。', '……みんな やっている。 仕方ない。', '評価が 上がった。 それだけだ。', '（うれしい。 ……うれしい？）'],
+  fake: ['口の端が 引きつる。', '笑うのは、 もう 慣れた。', '笑顔は ただの 操作だ。', '笑っている。 何が 楽しいのかは 忘れた。'],
+  self: ['少し、 呼吸が 楽になった。', 'これで よかったのか、 わからない。', '……まだ、 何か 残っていたらしい。', '（……？）'],
+  neutral: ['', '', '', ''],
+};
+
+// ---------- UI ----------
+const stage = $('stage');
+function updateHud() {
+  $('day').textContent = S.day; $('rank').textContent = rankOf(S.score);
+  $('house').innerHTML = `住居<br><b>${HOUSE[rankOf(S.score)]}</b>`;
+  const t = tier(S.self), app = $('app');
+  app.className = t === 0 ? '' : 's' + Math.min(t, 3);
+  const from = S.shown, to = S.score, t0 = performance.now();
+  const step = now => { const k = Math.min(1, (now - t0) / 700); S.shown = Math.round(from + (to - from) * k); $('score').textContent = S.shown; if (k < 1) requestAnimationFrame(step); };
+  requestAnimationFrame(step);
+}
+function page(html, buttons, cls = '') {
+  return new Promise(res => {
+    stage.innerHTML = `<div class="card ${cls}">${html}<div class="btns"></div></div>`;
+    const box = stage.querySelector('.btns');
+    buttons.forEach((b, i) => {
+      const el = document.createElement('button');
+      el.className = 'ch' + (b.main ? ' main' : '') + (b.dim ? ' dim' : '');
+      el.innerHTML = b.label; el.disabled = !!b.disabled;
+      el.onclick = () => res(i); box.appendChild(el);
+    });
+    window.scrollTo(0, 0);
+  });
+}
+const ok = (label = '次へ') => [{ label, main: true }];
+const p = t => `<p>${t}</p>`;
+
+async function playEvent(ev) {
+  const choices = fn(ev.c, S);
+  const tr = tier(S.self);
+  const best = Math.max(...choices.filter(c => !(c.need && S.self < c.need)).map(c => c.sc));
+  const btn = choices.map(c => {
+    const locked = (c.honest && S.self < 30) || (c.need && S.self < c.need);
+    if (locked) return { label: '██████████　（もう、 思いつかない）', disabled: true };
+    let label = c.t;
+    if (tr >= 1 && c.sc === best) label += '<span class="rec">★推奨</span>';
+    return { label, dim: tr >= 2 && c.sc !== best };
+  });
+  const i = await page(`<div class="head">DAY ${S.day}</div>${p(fn(ev.t, S))}`, btn);
+  const c = choices[i];
+  const gain = c.se > 0 && S.stepped > 0 ? Math.ceil(c.se / 2) : c.se; // 一度削れたものは戻りにくい
+  S.score = Math.max(0, S.score + c.sc); S.self = clamp(S.self + gain, 0, 100);
+  S.mio += c.mio; S.kw += c.kw; S.tk += c.tk; S.stepped += c.st;
+  if (c.flag) S.flags[c.flag] = true;
+  S.hist.push({ d: S.day, score: S.score, self: S.self });
+  updateHud();
+  const kind = c.st > 0 ? 'harm' : c.se > 2 ? 'self' : c.sc > 0 && c.se < 0 ? 'fake' : 'neutral';
+  const now = tier(S.self);
+  const voice = VOICE[kind][now];
+  let log = '';
+  if (c.sc !== 0) log = `<div class="log ${c.sc < 0 ? 'neg' : ''}">【評価】${c.lab || '行動'}　${c.sc > 0 ? '+' : ''}${c.sc}</div>`;
+  const cheer = now >= 3 ? '<p>評価ありがとうございます！ 今日も 素晴らしい 一日です！</p>' : '';
+  await page(`${log}${p(fn(c.r, S))}${voice ? `<p class="voice">${voice}</p>` : ''}${cheer}`, ok());
+}
+const clamp = (v, a, b) => Math.max(a, Math.min(b, v));
+
+const SLOGANS = ['みんなが みんなを 見ています', 'やさしさは 数値化 できます', '評価は あなたを 守ります', '高い スコアは 高い 幸福', '見られている 安心'];
+
+async function morning() {
+  if (S.day > 1) { S.score = Math.max(0, S.score - 8); updateHud(); }
+  const t = tier(S.self);
+  const you = t >= 3 ? 'CITIZEN-0417' : t >= 2 ? 'あなた（ID: 0417）' : 'あなた';
+  const line = S.day === 1 ? '' : `<div class="log neg">何もしなくても スコアは 少しずつ 減ります（-8）</div>`;
+  await page(`<div class="head">DAY ${S.day} / 14</div>${line}<p class="big">${S.day === 1 ? '評価の 街の 朝' : `${S.day} 日目の 朝`}</p>${p(`${you} の 今日の スコアは ${S.score}。 ランク ${rankOf(S.score)}。\n本日の 標語:「${SLOGANS[(S.day - 1) % SLOGANS.length]}」`)}`, ok('一日を はじめる'));
+}
+
+async function review() {
+  const r = rankOf(S.score);
+  const bad = r === 'C';
+  await page(`<div class="head">家賃審査</div><p class="big">${bad ? '退去の お知らせ' : 'ご利用ありがとうございます'}</p>${p(bad ? `あなたの スコアは ${S.score}（ランク C）。\n基準を 下回ったため、 契約の 更新は できません。\n荷物を まとめてください。` : `あなたの スコアは ${S.score}（ランク ${r}）。\n引き続き「${HOUSE[r]}」を ご利用いただけます。`)}`, ok());
+  return !bad;
+}
+
+function chart() {
+  const w = 640, h = 220, n = S.hist.length;
+  if (n < 2) return '';
+  const X = i => 30 + (w - 50) * i / (n - 1);
+  const maxS = Math.max(1000, ...S.hist.map(x => x.score));
+  const line = (key, max, col) => `<polyline fill="none" stroke="${col}" stroke-width="3" points="${S.hist.map((x, i) => `${X(i).toFixed(1)},${(h - 20 - (h - 40) * x[key] / max).toFixed(1)}`).join(' ')}"/>`;
+  return `<svg viewBox="0 0 ${w} ${h}" role="img" aria-label="スコアとあなたらしさの推移"><rect x="30" y="20" width="${w - 50}" height="${h - 40}" fill="none" stroke="#dde6ec"/>${line('score', maxS, '#1aa6a0')}${line('self', 100, '#f08a24')}</svg><div class="legend"><span><i style="background:#1aa6a0"></i>社会スコア</span><span><i style="background:#f08a24"></i>あなたらしさ（ずっと 隠されていた 数値）</span></div>`;
+}
+
+async function ending(kind) {
+  $('hud').hidden = false;
+  const E = {
+    escape: ['圏外へ', 'あなたは ミオと 夜明け前の 貨物列車に 乗った。\nスコアは 見えない。 評価も ない。 ただ、 隣に 誰かの 体温が ある。\n\n窓の 外で、 街の 灯りが 小さくなっていく。 端末を 開くと「圏外」と 表示された。\nはじめて、 誰にも 見られていない と 思った。'],
+    evictedWarm: ['評価圏外', '退去の 期限が 来た。 荷物は 小さな かばん ひとつ だった。\nスコアは 低い。 でも、 名前を 呼んでくれる 人が 、 まだ 一人 いた。\n\n「ゆっくりで いいよ」\n誰かの 部屋の 毛布は、 ちゃんと あたたかかった。'],
+    evictedCold: ['ひとりの 圏外', '退去の 期限が 来た。 かばんを 持って 街を 歩く。\n誰の 顔も 見えない。 誰に 頼れば いいのかも わからない。\n\nスコアを 稼ぐために 手放したものが 何だったのか、 今 やっと 少し わかる。\nでも もう、 それを 呼ぶ 名前が 思い出せない。'],
+    model: ['模範市民', 'スコアは 過去最高。 高層タワーの 42階 から 街を 見下ろしている。\n毎日 祝福の 通知が 届く。 みんなが あなたを ほめている。\n\n鏡の 中の 人は 完璧に 笑っている。 でも その顔が 誰なのか、 あなたには わからない。\n\n「おめでとうございます、 CITIZEN-0417」'],
+    clean: ['きれいな 手', 'スコアも、 自分も、 なんとか 守れた。\n運が よかった。 誰かの 助けも あった。 でも 数字は 語らない。 あなたが 何を 見ないふりして きたのか は。\n\n夜、 ふと 思う。「もし、 あの 選択を していなければ」\nその 気持ちが 残っていることが、 いちばんの 救いかも しれない。'],
+    still: ['まだ、あなた', 'スコアは 平凡。 でも 名前は 覚えている。 好きな 食べ物も、 ミオの 声も。\n\n街は 何も 変わらない。 でも あなたは 少しだけ 変わった。\n明日も 見られている。 それでも「見られない 場所」を 心の 中に 持ち続けよう。'],
+    hollow: ['平均的な誰か', '生き延びた。 スコアも ちょうど よかった。\nでも 何が 好きだったのか、 誰と 笑いたかったのか、 うまく 思い出せない。\n\n街は あなたを「安定した 市民」と 呼んだ。 それで 十分だと 誰かが 言った。'],
+  }[kind];
+  const stepped = S.stepped;
+  const people = [];
+  if (S.flags.stoleIdea) people.push('タカギ — あなたの 手柄横取りで 評価を 失った。');
+  if (S.flags.reportedTaka) people.push('タカギ — 通報の あと、 別室に 呼ばれた。');
+  if (S.flags.reportedKawai) people.push('カワイさん — 通報の あと、 部屋を 追われた。');
+  if (S.flags.reportedMio) people.push('ミオ — あなたの 通報で 連れて 行かれた。');
+  await page(`<div class="head">END</div><p class="big">${E[0]}</p>${p(E[1])}<p><b>あなたの スコア:</b> ${S.score}（${rankOf(S.score)}）\n<b>あなたらしさ:</b> ${Math.round(S.self)}%\n<b>踏み台に した 人:</b> ${stepped} 人</p>${people.length ? `<ul class="people">${people.map(x => `<li>${x}</li>`).join('')}</ul>` : ''}${chart()}`, [{ label: 'もう一度 はじめから', main: true }], 'end');
+  location.reload();
+}
+
+const PROLOGUE = [
+  'この街では、 すべての 行動が 「スコア」に なる。\n愛想の よさ、 発言、 投稿、 交友関係、 通報――。\n\nスコアが 高ければ 高層タワーに 住める。 低ければ 家も 仕事も 借りられない。',
+  'あなたは 何の 変哲も ない 市民。 スコアは 500。\n14日間 生き延びて、 家賃の 審査を 二度 通らなければ ならない。（7日目と 14日目）\n\n選択の たびに、 なにかが 少しずつ 動く。 あなたには それが 見えない。',
+];
+
+async function main() {
+  Object.assign(S, JSON.parse(JSON.stringify(START)));
+  $('hud').hidden = true; $('app').className = '';
+  await page('<div class="head">SIMULATION</div><p class="big">評価社会</p><p>毎日の 選択が すべて 数値に なる 街で、\n14日間 生き延びる。</p>', [{ label: 'はじめる', main: true }]);
+  for (const t of PROLOGUE) await page(p(t), ok());
+  $('hud').hidden = false; updateHud();
+  for (let d = 1; d <= 14; d++) {
+    S.day = d; updateHud();
+    await morning();
+    if (S.score < 120) return ending(S.self >= 50 && S.mio > 0 ? 'evictedWarm' : 'evictedCold');
+    for (const ev of EVENTS.filter(e => e.d === d && (!e.when || e.when(S)))) {
+      await playEvent(ev);
+      if (S.flags.escaped) return ending('escape');
+    }
+    if (d === 7 || d === 14) {
+      const okay = await review();
+      if (!okay) return ending(S.self >= 50 && S.mio > 0 ? 'evictedWarm' : 'evictedCold');
+    }
+  }
+  const s = S.score, se = S.self;
+  if (s >= 750) return ending(se < 40 ? 'model' : 'clean');
+  return ending(se >= 40 ? 'still' : 'hollow');
+}
+main();
+window.HS = { S, EVENTS, START, fn, rankOf };
+</script>
+</body>
+</html>
