@@ -1,0 +1,312 @@
+<!DOCTYPE html>
+<html lang="ja">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1, user-scalable=no">
+<title>ツボ登り</title>
+<style>
+  html, body { margin: 0; height: 100%; background: #10131c; overflow: hidden; }
+  canvas { display: block; width: 100vw; height: 100vh; touch-action: none; cursor: crosshair; }
+</style>
+</head>
+<body>
+<canvas id="c"></canvas>
+<script>
+(() => {
+'use strict';
+const cv = document.getElementById('c'), ctx = cv.getContext('2d');
+let W = 0, H = 0, DPR = 1, zoom = 1;
+function resize() {
+  DPR = Math.min(window.devicePixelRatio || 1, 2);
+  W = innerWidth; H = innerHeight;
+  cv.width = W * DPR; cv.height = H * DPR;
+  zoom = Math.min(W, H) / 640;
+}
+addEventListener('resize', resize); resize();
+
+// ---------- 乱数 ----------
+let seed = 20240607;
+const rnd = () => (seed = (seed * 1664525 + 1013904223) >>> 0) / 4294967296;
+const clamp = (v, a, b) => Math.max(a, Math.min(b, v));
+
+// ---------- ステージ生成 ----------
+const LEFT = -300, RIGHT = 800, GOAL_Y = -3200;
+const shapes = [];
+function addPoly(pts, col) {
+  let x0 = 1e9, y0 = 1e9, x1 = -1e9, y1 = -1e9;
+  for (const [x, y] of pts) { x0 = Math.min(x0, x); y0 = Math.min(y0, y); x1 = Math.max(x1, x); y1 = Math.max(y1, y); }
+  shapes.push({ t: 'p', pts, x0, y0, x1, y1, col: col ?? rnd() });
+}
+const box = (x, y, w, h, c) => addPoly([[x, y], [x + w, y], [x + w, y + h], [x, y + h]], c);
+function circ(x, y, r, c) { shapes.push({ t: 'c', x, y, r, x0: x - r, y0: y - r, x1: x + r, y1: y + r, col: c ?? rnd() }); }
+
+function buildLevel() {
+  shapes.length = 0; seed = 20240607;
+  box(-1000, 0, 2200, 400, 0.1);            // 地面
+  box(-1000, -4200, 700, 4600, 0.1);        // 左壁
+  box(RIGHT, -4200, 700, 4600, 0.1);        // 右壁
+  // スタート付近の岩
+  circ(230, -10, 75, 0.3);
+  box(-200, -90, 120, 90, 0.5);
+  // 踏み石チェーン
+  let prevL = 150, prevR = 320, top = -90, i = 0;
+  while (top > GOAL_Y + 120) {
+    const prog = clamp(-top / -GOAL_Y, 0, 1);
+    top -= 70 + prog * 55 + rnd() * 20;
+    const w = (170 - prog * 80) * (0.75 + rnd() * 0.5);
+    const gapX = 15 + prog * 55 + rnd() * 25;
+    let dir = rnd() < 0.5 ? -1 : 1;
+    let L = dir > 0 ? prevR + gapX : prevL - gapX - w;
+    if (L < LEFT + 10 || L + w > RIGHT - 10) { dir = -dir; L = dir > 0 ? prevR + gapX : prevL - gapX - w; }
+    L = clamp(L, LEFT + 10, RIGHT - 10 - w);
+    const kind = i % 7 === 3 ? 'slope' : (rnd() < 0.4 ? 'circ' : 'box');
+    if (kind === 'circ') { const r = w / 2; circ(L + r, top + r, r); }
+    else if (kind === 'slope') addPoly(dir > 0 ? [[L, top + 55], [L + w, top], [L + w, top + 55]] : [[L, top], [L + w, top + 55], [L, top + 55]]);
+    else box(L, top, w, 40 + rnd() * 40);
+    prevL = L; prevR = L + w; i++;
+  }
+  box(LEFT, GOAL_Y, RIGHT - LEFT, 60, 0.9);   // ゴール台
+}
+buildLevel();
+
+// ---------- 衝突 ----------
+// 円 vs 形状: 戻り値 {nx,ny,d} (形状から円へ向かう法線)
+function hitCircle(s, cx, cy, r) {
+  if (cx + r < s.x0 || cx - r > s.x1 || cy + r < s.y0 || cy - r > s.y1) return null;
+  if (s.t === 'c') {
+    const dx = cx - s.x, dy = cy - s.y, dist = Math.hypot(dx, dy), pen = s.r + r - dist;
+    if (pen <= 0) return null;
+    return dist < 1e-6 ? { nx: 0, ny: -1, d: pen } : { nx: dx / dist, ny: dy / dist, d: pen };
+  }
+  const P = s.pts, n = P.length;
+  let best = 1e18, qx = 0, qy = 0, sign = 0, inside = true;
+  for (let i = 0; i < n; i++) {
+    const [ax, ay] = P[i], [bx, by] = P[(i + 1) % n];
+    const ex = bx - ax, ey = by - ay, l2 = ex * ex + ey * ey;
+    const t = clamp(((cx - ax) * ex + (cy - ay) * ey) / l2, 0, 1);
+    const px = ax + ex * t, py = ay + ey * t, d2 = (cx - px) ** 2 + (cy - py) ** 2;
+    if (d2 < best) { best = d2; qx = px; qy = py; }
+    const cr = ex * (cy - ay) - ey * (cx - ax);
+    if (sign === 0) sign = Math.sign(cr); else if (Math.sign(cr) !== sign) inside = false;
+  }
+  const dist = Math.sqrt(best);
+  if (inside) {
+    const dx = qx - cx, dy = qy - cy, l = Math.hypot(dx, dy) || 1;
+    return { nx: dx / l, ny: dy / l, d: dist + r };
+  }
+  if (dist >= r) return null;
+  return { nx: (cx - qx) / dist, ny: (cy - qy) / dist, d: r - dist };
+}
+
+// ---------- プレイヤー ----------
+const R = 20, HR = 6, L = 92, G = 1100, MAXROT = 13, MU = 0.9;
+const P = { x: 0, y: -R - 2, vx: 0, vy: 0, a: -Math.PI / 2 };
+const mouse = { x: W / 2, y: 0 };
+let target = -Math.PI / 4;
+let contact = 0, bodyHit = 0, hitSound = 0;
+const S = { maxH: 0, falls: 0, time: 0, won: false, started: false, peak: P.y, msg: '', msgT: 0 };
+
+function angDiff(a, b) { let d = a - b; while (d > Math.PI) d -= 2 * Math.PI; while (d < -Math.PI) d += 2 * Math.PI; return d; }
+
+function sub(dt) {
+  // ハンマーを目標角へ回す
+  const da = clamp(angDiff(target, P.a), -MAXROT * dt, MAXROT * dt);
+  const prevA = P.a; P.a += da;
+  const dHx = L * (Math.cos(P.a) - Math.cos(prevA)), dHy = L * (Math.sin(P.a) - Math.sin(prevA));
+
+  P.vy += G * dt;
+  P.x += P.vx * dt; P.y += P.vy * dt;
+
+  // 体(ツボ)の衝突
+  bodyHit = 0;
+  for (let it = 0; it < 3; it++) for (const s of shapes) {
+    const h = hitCircle(s, P.x, P.y, R); if (!h) continue;
+    P.x += h.nx * h.d; P.y += h.ny * h.d;
+    const vn = P.vx * h.nx + P.vy * h.ny;
+    if (vn < 0) { if (vn < -350) hitSound = Math.max(hitSound, -vn); P.vx -= h.nx * vn * 1.12; P.vy -= h.ny * vn * 1.12; }
+    const k = Math.min(1, 5 * dt), tx = P.vx - h.nx * (P.vx * h.nx + P.vy * h.ny), ty = P.vy - h.ny * (P.vx * h.nx + P.vy * h.ny);
+    P.vx -= tx * k; P.vy -= ty * k; bodyHit = 1;
+  }
+  // ハンマーヘッドの衝突
+  let touched = 0;
+  for (let it = 0; it < 3; it++) for (const s of shapes) {
+    const hx = P.x + Math.cos(P.a) * L, hy = P.y + Math.sin(P.a) * L;
+    const h = hitCircle(s, hx, hy, HR); if (!h) continue;
+    touched = 1;
+    const dn = dHx * h.nx + dHy * h.ny;
+    const tx = dHx - h.nx * dn, ty = dHy - h.ny * dn;
+    let sx = h.nx * h.d - tx * MU, sy = h.ny * h.d - ty * MU;
+    const m = Math.hypot(sx, sy); if (m > 14) { sx *= 14 / m; sy *= 14 / m; }
+    P.x += sx; P.y += sy;
+    P.vx += sx / dt * 0.22; P.vy += sy / dt * 0.22;
+    const vn = P.vx * h.nx + P.vy * h.ny; if (vn < 0) { P.vx -= h.nx * vn; P.vy -= h.ny * vn; }
+    if (m > 3) hitSound = Math.max(hitSound, m * 60);
+  }
+  contact = touched;
+  const sp = Math.hypot(P.vx, P.vy); if (sp > 1500) { P.vx *= 1500 / sp; P.vy *= 1500 / sp; }
+  const drag = 1 - 0.25 * dt; P.vx *= drag; P.vy *= drag;
+}
+
+// ---------- ナレーション ----------
+const LINES = {
+  start: ['ツボに入ったおじさんが、ハンマー一本で山頂を目指す。', 'マウスでハンマーを動かして、岩を引っかけて登ろう。'],
+  fall: ['……そういう日もあるさ。', 'ここまで来た努力は、無駄じゃない。たぶん。', '落ちた高さより、また登ることが大事だと言われている。', '重力は、いつだって公平だ。', 'ハンマーを握る手に、少し力が入りすぎていたね。', 'この岩は、君を試している。'],
+  bigFall: ['あーあ。……でも、ここからが本番だ。', 'これほどの高さを失うのは、才能かもしれない。', '大丈夫、景色は同じだから何度でも楽しめる。'],
+  hi: { 10: '10m。まだ序の口だ。', 25: '25m。空気が薄くなってきた。', 40: '40m。ここまで来て落ちるなよ。', 55: '55m。頂上はすぐそこだ。' }
+};
+const said = new Set();
+function say(t, sec = 5) { S.msg = t; S.msgT = sec; }
+const pick = a => a[Math.floor(Math.random() * a.length)];
+
+// ---------- 入力 ----------
+function setMouse(x, y) { mouse.x = x; mouse.y = y; S.started = true; }
+addEventListener('mousemove', e => setMouse(e.clientX, e.clientY));
+addEventListener('touchstart', e => { setMouse(e.touches[0].clientX, e.touches[0].clientY); e.preventDefault(); }, { passive: false });
+addEventListener('touchmove', e => { setMouse(e.touches[0].clientX, e.touches[0].clientY); e.preventDefault(); }, { passive: false });
+addEventListener('keydown', e => { if (e.code === 'KeyR') reset(); });
+function reset() {
+  Object.assign(P, { x: 0, y: -R - 2, vx: 0, vy: 0, a: -Math.PI / 2 });
+  Object.assign(S, { maxH: 0, falls: 0, time: 0, won: false, peak: P.y });
+  said.clear(); say(LINES.start[0], 6);
+}
+
+// ---------- カメラ ----------
+const cam = { x: 0, y: -150 };
+
+// ---------- 効果音 ----------
+let ac = null;
+function thud(v) {
+  try {
+    ac = ac || new (window.AudioContext || window.webkitAudioContext)();
+    const o = ac.createOscillator(), g = ac.createGain();
+    o.type = 'triangle'; o.frequency.value = 90 + Math.random() * 40;
+    g.gain.setValueAtTime(clamp(v / 1500, 0.03, 0.25), ac.currentTime);
+    g.gain.exponentialRampToValueAtTime(0.001, ac.currentTime + 0.15);
+    o.connect(g); g.connect(ac.destination); o.start(); o.stop(ac.currentTime + 0.16);
+  } catch (e) {}
+}
+
+// ---------- 描画 ----------
+function rockColor(c, top) {
+  const l = 30 + c * 14 + (top ? 8 : 0);
+  return `hsl(${28 + c * 20}, 14%, ${l}%)`;
+}
+function draw() {
+  const h = -P.y / 50;
+  const prog = clamp(h / 64, 0, 1);
+  const g = ctx.createLinearGradient(0, 0, 0, H * DPR);
+  const top = [`hsl(${210 - prog * 20}, 60%, ${55 - prog * 40}%)`, `hsl(${200 - prog * 10}, 55%, ${75 - prog * 40}%)`];
+  g.addColorStop(0, top[0]); g.addColorStop(1, top[1]);
+  ctx.setTransform(1, 0, 0, 1, 0, 0); ctx.fillStyle = g; ctx.fillRect(0, 0, cv.width, cv.height);
+  // 雲 (視差)
+  ctx.fillStyle = `rgba(255,255,255,${0.5 - prog * 0.3})`;
+  for (let i = 0; i < 24; i++) {
+    const px = ((i * 397 - cam.x * 0.2) % 1600 + 1600) % 1600 - 400, py = i * -260 + 200 - cam.y * 0.3;
+    const sy = ((py % 2400) + 2400) % 2400 - 400;
+    ctx.beginPath(); ctx.ellipse(px * zoom * DPR, sy * zoom * DPR * 0.6, 90 * zoom * DPR, 22 * zoom * DPR, 0, 0, 7); ctx.fill();
+  }
+  ctx.setTransform(zoom * DPR, 0, 0, zoom * DPR, (W / 2 - cam.x * zoom) * DPR, (H / 2 - cam.y * zoom) * DPR);
+  const vx0 = cam.x - W / 2 / zoom - 50, vx1 = cam.x + W / 2 / zoom + 50, vy0 = cam.y - H / 2 / zoom - 50, vy1 = cam.y + H / 2 / zoom + 50;
+  ctx.lineWidth = 3; ctx.lineJoin = 'round';
+  for (const s of shapes) {
+    if (s.x1 < vx0 || s.x0 > vx1 || s.y1 < vy0 || s.y0 > vy1) continue;
+    ctx.fillStyle = rockColor(s.col, false); ctx.strokeStyle = '#1b1712';
+    ctx.beginPath();
+    if (s.t === 'c') ctx.arc(s.x, s.y, s.r, 0, 7);
+    else { ctx.moveTo(s.pts[0][0], s.pts[0][1]); for (let i = 1; i < s.pts.length; i++) ctx.lineTo(s.pts[i][0], s.pts[i][1]); ctx.closePath(); }
+    ctx.fill(); ctx.stroke();
+    ctx.save(); ctx.clip();
+    ctx.fillStyle = 'rgba(255,255,255,.12)';
+    ctx.fillRect(s.x0, s.y0, s.x1 - s.x0, 8);
+    ctx.restore();
+  }
+  // ゴールの旗
+  ctx.fillStyle = '#fff'; ctx.fillRect(300, GOAL_Y - 120, 5, 120);
+  ctx.fillStyle = '#e63946'; ctx.beginPath(); ctx.moveTo(305, GOAL_Y - 120); ctx.lineTo(365, GOAL_Y - 100); ctx.lineTo(305, GOAL_Y - 80); ctx.fill();
+
+  drawPlayer();
+
+  // HUD
+  ctx.setTransform(DPR, 0, 0, DPR, 0, 0);
+  ctx.font = '700 18px "Hiragino Kaku Gothic ProN", "Yu Gothic", sans-serif'; ctx.textAlign = 'left';
+  const line = t => { ctx.lineWidth = 4; ctx.strokeStyle = 'rgba(0,0,0,.6)'; ctx.fillStyle = '#fff'; return t; };
+  const txt = (t, x, y) => { ctx.strokeText(t, x, y); ctx.fillText(t, x, y); };
+  line(); txt(`高さ ${Math.max(0, h).toFixed(1)} m`, 16, 30);
+  txt(`最高 ${S.maxH.toFixed(1)} m / ゴール 64 m`, 16, 54);
+  txt(`落下 ${S.falls} 回　${S.time.toFixed(1)} 秒`, 16, 78);
+  ctx.textAlign = 'right'; ctx.font = '14px sans-serif'; txt('R: 最初から', W - 16, 26);
+  if (S.msgT > 0) {
+    ctx.textAlign = 'center'; ctx.font = '700 22px "Hiragino Kaku Gothic ProN", "Yu Gothic", sans-serif';
+    ctx.globalAlpha = Math.min(1, S.msgT); txt(S.msg, W / 2, H - 40); ctx.globalAlpha = 1;
+  }
+  if (S.won) {
+    ctx.fillStyle = 'rgba(0,0,0,.6)'; ctx.fillRect(0, 0, W, H);
+    ctx.textAlign = 'center'; ctx.fillStyle = '#ffe066'; ctx.font = '700 44px sans-serif';
+    ctx.fillText('山頂到達！', W / 2, H / 2 - 20);
+    ctx.fillStyle = '#fff'; ctx.font = '700 22px sans-serif';
+    ctx.fillText(`タイム ${S.time.toFixed(1)} 秒　落下 ${S.falls} 回`, W / 2, H / 2 + 24);
+    ctx.fillText('R キーでもう一度', W / 2, H / 2 + 60);
+  }
+}
+
+function drawPlayer() {
+  const hx = P.x + Math.cos(P.a) * L, hy = P.y + Math.sin(P.a) * L;
+  // 体
+  ctx.save(); ctx.translate(P.x, P.y);
+  ctx.fillStyle = '#c96a28'; ctx.strokeStyle = '#4a2208'; ctx.lineWidth = 3;
+  ctx.beginPath(); ctx.arc(0, 2, R, 0, 7); ctx.fill(); ctx.stroke();
+  ctx.fillStyle = '#e89a5a'; ctx.beginPath(); ctx.ellipse(-6, -2, 5, 9, 0.4, 0, 7); ctx.fill();
+  // 上半身 (ツボから出ている)
+  ctx.fillStyle = '#e8b48a'; ctx.strokeStyle = '#4a2208';
+  ctx.beginPath(); ctx.ellipse(0, -R + 2, 13, 11, 0, 0, 7); ctx.fill(); ctx.stroke();
+  ctx.beginPath(); ctx.arc(0, -R - 12, 10, 0, 7); ctx.fill(); ctx.stroke();       // 頭 (ハゲ)
+  ctx.fillStyle = '#222'; ctx.fillRect(-5, -R - 14, 3, 3); ctx.fillRect(3, -R - 14, 3, 3);
+  ctx.restore();
+  // ツボの縁
+  ctx.strokeStyle = '#4a2208'; ctx.lineWidth = 4;
+  ctx.beginPath(); ctx.ellipse(P.x, P.y - R + 6, R - 2, 5, 0, 0, Math.PI); ctx.stroke();
+  // ハンマー
+  ctx.strokeStyle = '#7a5230'; ctx.lineWidth = 5; ctx.lineCap = 'round';
+  ctx.beginPath(); ctx.moveTo(P.x, P.y - R + 4); ctx.lineTo(hx, hy); ctx.stroke();
+  ctx.save(); ctx.translate(hx, hy); ctx.rotate(P.a);
+  ctx.fillStyle = '#9aa0a8'; ctx.strokeStyle = '#2a2d32'; ctx.lineWidth = 2;
+  ctx.fillRect(-4, -9, 12, 18); ctx.strokeRect(-4, -9, 12, 18);
+  ctx.restore(); ctx.lineCap = 'butt';
+}
+
+// ---------- ループ ----------
+let last = performance.now();
+say(LINES.start[0], 7); setTimeout(() => say(LINES.start[1], 7), 7500);
+function frame(now) {
+  const dt = Math.min(0.033, (now - last) / 1000); last = now;
+  // 目標角 (画面上のマウス→ワールド)
+  const mx = cam.x + (mouse.x - W / 2) / zoom, my = cam.y + (mouse.y - H / 2) / zoom;
+  if (S.started && Math.hypot(mx - P.x, my - P.y) > 25) target = Math.atan2(my - P.y, mx - P.x);
+  const N = 8; hitSound = 0;
+  if (!S.won) for (let i = 0; i < N; i++) sub(dt / N);
+  if (hitSound > 0) thud(hitSound);
+  if (!S.won && S.started) S.time += dt;
+  P.x = clamp(P.x, LEFT - 100, RIGHT + 100);
+  const h = -P.y / 50;
+  S.maxH = Math.max(S.maxH, h);
+  // 落下検知
+  if (P.y < S.peak) S.peak = P.y;
+  if (P.y - S.peak > 450 && bodyHit) {
+    S.falls++;
+    say((S.peak - P.y) < -900 ? pick(LINES.bigFall) : pick(LINES.fall), 6);
+    S.peak = P.y;
+  } else if (P.y - S.peak > 450) S.peak = P.y - 449;
+  for (const k in LINES.hi) if (S.maxH >= k && !said.has(k)) { said.add(k); say(LINES.hi[k], 5); }
+  if (!S.won && P.y < GOAL_Y - R + 1 && P.x > LEFT && P.x < RIGHT) { S.won = true; say('', 0); }
+  if (S.msgT > 0) S.msgT -= dt;
+  cam.x += (P.x - cam.x) * Math.min(1, dt * 4);
+  cam.y += (P.y - 60 - cam.y) * Math.min(1, dt * 4);
+  draw();
+  requestAnimationFrame(frame);
+}
+requestAnimationFrame(frame);
+window.__game = { P, S, shapes, mouse, sub, get target() { return target; }, set target(v) { target = v; }, setStarted() { S.started = true; } };
+})();
+</script>
+</body>
+</html>
