@@ -197,6 +197,7 @@ const Battle = (() => {
   }
 
   function update(dt) {
+    time += dt;
     clock = actx.currentTime - t0;
     if (over || won) { if (won && actx.currentTime - t0 > endT + 1) stopSong(); return; }
     // 移動
@@ -234,18 +235,28 @@ const Battle = (() => {
   function render() {
     ctx.save();
     if (shakeB > 0) ctx.translate(Math.round(rand(-2, 2)), Math.round(rand(-1, 1)));
-    ctx.fillStyle = '#000'; ctx.fillRect(0, 0, W, H);
-    // りんご（音の瞬間に跳ねる）
-    const bob = Math.sin(performance.now() / 400) * 2 - appleBob * 6;
-    ctx.drawImage(APPLE, W / 2 - 32, 30 + bob, 64, 60);
-    text(SONG.title, W / 2, 20, 11, '#8b93d8', 'center');
-    // 箱（ビートでふちが光る）
-    ctx.lineWidth = 3; ctx.strokeStyle = flash > 0 ? `rgb(255,255,${Math.round(255 - flash * 120)})` : '#fff';
+    // ももんがの夜の森の背景
+    cam = { x: 0 };
+    drawBackground(0); drawWater();
+    // ボス：大きなコウモリ（音の瞬間に跳ねる）
+    ctx.save();
+    ctx.translate(W / 2, 62 + Math.sin(performance.now() / 400) * 2 - appleBob * 6); ctx.scale(3, 3);
+    cam = { x: 0 }; drawBat({ x: 0, y: 0, t: performance.now() / 1000 * (1 + appleBob) });
+    ctx.restore();
+    text(SONG.title, W / 2, 20, 11, '#b9c4f0', 'center');
+    // 足場（草の地面）と戦闘の箱
+    ctx.fillStyle = '#5a3a22'; ctx.fillRect(BOX.x - 14, BOX.y + BOX.h + 2, BOX.w + 28, 8);
+    ctx.fillStyle = '#3f8f3a'; ctx.fillRect(BOX.x - 14, BOX.y + BOX.h, BOX.w + 28, 4);
+    ctx.fillStyle = 'rgba(4,6,24,0.72)'; ctx.fillRect(BOX.x, BOX.y, BOX.w, BOX.h);
+    ctx.lineWidth = 3; ctx.strokeStyle = flash > 0 ? `rgb(255,255,${Math.round(255 - flash * 120)})` : '#c9d3ff';
     ctx.strokeRect(BOX.x - 1.5, BOX.y - 1.5, BOX.w + 3, BOX.h + 3);
-    // 弾
+    // 弾：短い音＝ホタル、長い音＝岩
     for (const b of bullets) {
-      ctx.fillStyle = b.long ? '#ffd44a' : '#fff';
-      ctx.beginPath(); ctx.arc(Math.round(b.x), Math.round(b.y), b.r, 0, Math.PI * 2); ctx.fill();
+      if (b.long) ctx.drawImage(ROCK, Math.round(b.x) - 7, Math.round(b.y) - 4);
+      else {
+        ctx.drawImage(glow(10, 'rgba(190,255,150,0.6)'), Math.round(b.x) - 10, Math.round(b.y) - 10);
+        ctx.fillStyle = '#e6ffb0'; ctx.beginPath(); ctx.arc(Math.round(b.x), Math.round(b.y), 3, 0, Math.PI * 2); ctx.fill();
+      }
     }
     // ハート
     if (!over && (heart.inv <= 0 || Math.floor(heart.inv * 12) % 2 === 0)) {
