@@ -115,6 +115,33 @@ const SFX = {
   splash: () => beep(120, 0.3, 'sine', 0.08, -60),
 };
 
+// ---------- リズム ----------
+// 攻撃(コウモリ)はこの BPM の拍に合わせて出現・動く。曲を差し替える時は BPM を曲に合わせる。
+const BPM = 120, SPB = 60 / BPM;          // 1拍の秒数
+const BASS = [55, 0, 55, 0, 82.4, 0, 73.4, 0, 55, 0, 55, 0, 98, 0, 82.4, 73.4]; // 8分音符x16 (2小節)
+var step = -1, beatPulse = 0;
+function musicStep(n) {
+  const beat = n % 2 === 0;
+  if (beat) { beep(110, 0.12, 'sine', 0.09, -70); beatPulse = 1; }          // キック
+  else beep(5000, 0.03, 'square', 0.012);                                    // ハット
+  const b = BASS[n % BASS.length];
+  if (b) beep(b * 2, 0.16, 'triangle', 0.05);
+  if (n % 16 === 8 || n % 16 === 14) beep(b ? b * 8 : 660, 0.1, 'square', 0.02);
+}
+// 拍ごとの攻撃パターン (8拍=2小節。難易度が上がると増える)
+function attackBeats(d) { return d < 0.35 ? [0, 4] : d < 0.7 ? [0, 3, 4] : [0, 2, 4, 6]; }
+function spawnBat(i) {
+  bats.push({ x: cam.x + W + 20, y0: 100 + ((i * 37) % 80), t: 0, vx: -(38 + 35 * diff()) });
+}
+function rhythmTick() {
+  const n = Math.floor(time / (SPB / 2));
+  while (step < n) {
+    step++; musicStep(step);
+    if (step % 2 === 0 && dist() > 80 && attackBeats(diff()).includes((step / 2) % 8)) spawnBat(step / 2);
+  }
+  beatPulse = Math.max(0, beatPulse - 0.05);
+}
+
 // ---------- 入力 ----------
 const keys = new Set();
 let jumpBuf = 0;
@@ -147,7 +174,7 @@ cv.addEventListener('pointerdown', () => { if (state === 'title' || state === 'o
 // ---------- ゲーム状態 ----------
 let state = 'title';
 let cam, player, plats, coins, orbs, rocks, bats, parts, deco;
-let genX, lastY, score, coinCount, maxX, time, batTimer, best = 0, shake;
+let genX, lastY, score, coinCount, maxX, time, best = 0, shake;
 try { best = +localStorage.getItem('momonga_best') || 0; } catch (e) { /* noop */ }
 
 const dist = () => Math.floor(maxX / 12);
@@ -163,7 +190,7 @@ function startGame() {
   plats.push({ x: -200, y: 200, w: 520, seed: 1, lastRock: true });
   plats[0].lamp = 140;
   genX = 320; lastY = 200;
-  score = 0; coinCount = 0; maxX = 0; time = 0; batTimer = 4; shake = 0; jumpBuf = 0;
+  score = 0; coinCount = 0; maxX = 0; time = 0; step = -1; beatPulse = 0; shake = 0; jumpBuf = 0;
   state = 'play';
   SFX.jump();
 }
@@ -345,15 +372,11 @@ function update(dt) {
   for (const r of rocks) {
     if (Math.abs(r.x - P.x) < 9 && P.y > r.y - r.h && P.y - 12 < r.y) hurt();
   }
-  // コウモリ
-  batTimer -= dt;
-  if (dist() > 80 && batTimer <= 0) {
-    batTimer = rand(3.5 - 1.8 * diff(), 6 - 2.5 * diff());
-    bats.push({ x: cam.x + W + 20, y0: rand(90, 190), t: rand(0, 6), vx: -(38 + 35 * diff()) });
-  }
+  // コウモリ (拍に合わせて出現)
+  rhythmTick();
   for (let i = bats.length - 1; i >= 0; i--) {
     const b = bats[i];
-    b.t += dt; b.x += b.vx * dt; b.y = b.y0 + Math.sin(b.t * 2.4) * 22;
+    b.t += dt; b.x += b.vx * dt; b.y = b.y0 + Math.sin(b.t * Math.PI / SPB) * 22; // 2拍で1往復
     if (b.x < cam.x - 40) { bats.splice(i, 1); continue; }
     if (Math.abs(b.x - P.x) < 11 && Math.abs(b.y - (P.y - 8)) < 11) {
       if (P.vy > 40 && P.y - 6 < b.y) {
@@ -399,7 +422,7 @@ function drawBackground(cx) {
     ctx.fillRect(Math.floor(s.x), Math.floor(s.y), 1, 1);
   }
   // 月
-  ctx.drawImage(glow(60, 'rgba(255,240,190,0.45)'), 320 - 60, 56 - 60);
+  ctx.globalAlpha = 0.6 + 0.4 * beatPulse; ctx.drawImage(glow(60, 'rgba(255,240,190,0.45)'), 320 - 60, 56 - 60); ctx.globalAlpha = 1;
   ctx.fillStyle = '#fff3c4'; ctx.beginPath(); ctx.arc(320, 56, 22, 0, 6.283); ctx.fill();
   ctx.fillStyle = '#e8d9a0';
   [[312, 50, 4], [326, 62, 3], [325, 46, 2]].forEach(([x, y, r]) => { ctx.beginPath(); ctx.arc(x, y, r, 0, 6.283); ctx.fill(); });
@@ -554,7 +577,7 @@ function drawRock(r) {
 }
 function drawBat(b) {
   const x = Math.round(b.x - cam.x), y = Math.round(b.y);
-  const up = Math.sin(b.t * 14) > 0;
+  const up = (b.t % SPB) < SPB * 0.4;  // 拍の頭で羽ばたく
   ctx.fillStyle = '#5a3c9a';
   const wy = up ? -6 : 1;
   ctx.fillRect(x - 12, y + wy, 8, 3); ctx.fillRect(x - 9, y + wy - 2, 5, 2);
