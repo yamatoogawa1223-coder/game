@@ -248,7 +248,11 @@ const Battle = (() => {
       ctx.beginPath(); ctx.arc(Math.round(b.x), Math.round(b.y), b.r, 0, Math.PI * 2); ctx.fill();
     }
     // ハート
-    if (!over && (heart.inv <= 0 || Math.floor(heart.inv * 12) % 2 === 0)) drawHeart(Math.round(heart.x) - 10, Math.round(heart.y) - 8 , true);
+    if (!over && (heart.inv <= 0 || Math.floor(heart.inv * 12) % 2 === 0)) {
+      const spr = SPR[(isDown('ArrowLeft', 'KeyA') ? 'walk1L' : isDown('ArrowRight', 'KeyD') ? 'walk1' : 'idle')];
+      ctx.drawImage(spr, Math.round(heart.x) - 8, Math.round(heart.y) - 9);
+      ctx.fillStyle = '#ff4d6a'; ctx.fillRect(Math.round(heart.x) - 1, Math.round(heart.y) - 1, 3, 3); // 当たり判定
+    }
     popups.forEach(p => text(p.s, p.x, p.y, 12, '#ff6a6a', 'center'));
     // HP
     text('HP', 165, 248, 12, '#fff');
