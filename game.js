@@ -128,6 +128,7 @@ addEventListener('keydown', e => {
 addEventListener('keyup', e => keys.delete(e.code));
 addEventListener('blur', () => keys.clear());
 function onPress(code) {
+  if (state === 'battle') return;
   if (state === 'title' || state === 'over') {
     if (code === 'Enter' || code === 'Space' || code === 'KeyZ' || code === 'ArrowUp') { startGame(); return; }
   }
@@ -142,7 +143,10 @@ document.querySelectorAll('.pad button').forEach(b => {
   b.addEventListener('pointerdown', down);
   ['pointerup', 'pointercancel', 'pointerleave'].forEach(t => b.addEventListener(t, up));
 });
-cv.addEventListener('pointerdown', () => { if (state === 'title' || state === 'over') startGame(); });
+cv.addEventListener('pointerdown', e => {
+  if (state === 'title' && (e.clientY - cv.getBoundingClientRect().top) / cv.getBoundingClientRect().height > 0.9) return; // 下端はリズム戦闘へ
+  if (state === 'title' || state === 'over') startGame();
+});
 
 // ---------- ゲーム状態 ----------
 let state = 'title';
@@ -644,6 +648,7 @@ function drawTitle() {
   text('Enter / Space / タップ でスタート', W / 2, 190, 14, '#ffe58a', 'center');
   text('← → 移動    ↑ ジャンプ    Z 滑空(空中で押し続ける)    P ポーズ', W / 2, 220, 11, '#b9c4f0', 'center');
   text('コインを集めて、どこまで飛べるかな？  ベスト: ' + best, W / 2, 242, 11, '#b9c4f0', 'center');
+  text('B / 下端タップ: リズム戦闘モード', W / 2, 262, 10, '#ff8fa0', 'center');
 }
 function drawOver() {
   drawOverlayPanel();
@@ -655,6 +660,7 @@ function drawOver() {
 
 // ---------- メインループ ----------
 function render() {
+  if (state === 'battle') { Battle.render(); return; }
   const cx = cam ? cam.x : time * 30;
   ctx.save();
   if (state !== 'title' && shake > 0) ctx.translate(Math.round(rand(-2, 2)), Math.round(rand(-2, 2)));
@@ -680,7 +686,8 @@ function render() {
 let last = performance.now();
 function frame(now) {
   const dt = Math.min(0.033, (now - last) / 1000); last = now;
-  if (state === 'play') update(dt);
+  if (state === 'battle') Battle.update(dt);
+  else if (state === 'play') update(dt);
   else { time += dt; if (state === 'over') for (const q of parts) { q.life -= dt; } }
   render();
   requestAnimationFrame(frame);
