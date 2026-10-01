@@ -1,0 +1,29 @@
+<!DOCTYPE html>
+<html lang="ja">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1, user-scalable=no">
+<title>転生林檎 ―めぐる果樹園―</title>
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link href="https://fonts.googleapis.com/css2?family=DotGothic16&display=swap" rel="stylesheet">
+<style>
+  html,body{margin:0;height:100%;background:#000;overflow:hidden;touch-action:none;user-select:none;-webkit-user-select:none}
+  body{display:flex;align-items:center;justify-content:center}
+  #wrap{position:relative;width:min(100vw,100vh*4/3);aspect-ratio:4/3}
+  canvas{width:100%;height:100%;display:block;image-rendering:pixelated;background:#000}
+  .pad{position:absolute;bottom:3%;display:none;gap:2%}
+  .pad.l{left:2%}.pad.r{right:2%}
+  .pad button{width:12vmin;height:12vmin;border-radius:14px;border:2px solid #fff8;background:#0008;color:#fff;font:700 4.5vmin/1 'DotGothic16',sans-serif;touch-action:none}
+  .pad button.on{background:#fff6}
+  @media (pointer:coarse){.pad{display:flex}}
+</style>
+</head>
+<body>
+<div id="wrap">
+  <canvas id="g" width="320" height="240"></canvas>
+  <div class="pad l"><button data-a="left">◀</button><button data-a="up">▲</button><button data-a="down">▼</button><button data-a="right">▶</button></div>
+  <div class="pad r"><button data-a="menu">C</button><button data-a="cancel">X</button><button data-a="ok">Z</button></div>
+</div>
+<script src="game.js"></script>
+</body>
+</html>
